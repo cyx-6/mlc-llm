@@ -208,7 +208,15 @@ class LlamaAttention(nn.Module):
         past_key_value: Tuple[relax.Expr],
         attention_mask: Optional[relax.Expr] = None,
     ) -> Tuple[relax.Expr, Optional[relax.Expr], Optional[Tuple[relax.Expr]]]:
-        from tvm.relax.op import astype, matmul, maximum, permute_dims, reshape, squeeze
+        from tvm.relax.op import (
+            astype,
+            matmul,
+            maximum,
+            permute_dims,
+            reshape,
+            squeeze,
+            call_tir,
+        )
         from tvm.relax.op.nn import softmax
 
         bsz, q_len, _ = hidden_states.struct_info.shape
@@ -283,57 +291,25 @@ class LlamaAttention(nn.Module):
                 sinfo_args=[R.Tensor(kv_cache_shape, kv_states_dtype)],
             )
         )
-        key_states = nn.emit(reshape(k_cache, kv_states_shape))
-        value_states = nn.emit(reshape(v_cache, kv_states_shape))
-
-        query_states = nn.emit(permute_dims(query_states, [0, 2, 1, 3]))
-        key_states = nn.emit(permute_dims(key_states, [0, 2, 1, 3]))
-        value_states = nn.emit(permute_dims(value_states, [0, 2, 1, 3]))
-
-        attn_weights = nn.emit(
-            matmul(query_states, permute_dims(key_states, [0, 1, 3, 2]))
-            / relax.const(math.sqrt(self.head_dim), query_states.struct_info.dtype)
-        )
-
-        tvm.ir.assert_structural_equal(
-            attn_weights.struct_info.shape.values,
-            (bsz, tvm.tir.IntImm("int64", self.num_heads), q_len, kv_seq_len),
-        )
-        tvm.ir.assert_structural_equal(
-            attention_mask.struct_info.shape.values,
-            (bsz, tvm.tir.IntImm("int64", 1), q_len, kv_seq_len),
-        )
-
-        attn_weights = nn.emit(
-            maximum(
-                attn_weights,
-                relax.const(
-                    tvm.tir.min_value(attn_weights.struct_info.dtype).value,
-                    attn_weights.struct_info.dtype,
+        q_states_shape = query_states.struct_info.shape
+        query_states = nn.emit(reshape(query_states, q_states_shape.values[1:]))
+        key_states = nn.emit(reshape(k_cache, kv_states_shape.values[1:]))
+        value_states = nn.emit(reshape(v_cache, kv_states_shape.values[1:]))
+        attn_output = nn.emit(
+            call_tir(
+                flash_attn_func,
+                args=[query_states, key_states, value_states],
+                out_sinfo=R.Tensor(
+                    (
+                        q_len,
+                        tvm.tir.IntImm("int64", self.num_heads),
+                        tvm.tir.IntImm("int64", self.head_dim),
+                    ),
+                    dtype=query_states.struct_info.dtype,
                 ),
             )
         )
-        attn_weights = nn.emit(relax.op.minimum(attn_weights, attention_mask))
-
-        # upcast attention to fp32
-        if attn_weights.struct_info.dtype != "float32":
-            attn_weights = astype(attn_weights, "float32")
-        attn_weights = nn.emit(softmax(attn_weights, axis=-1))
-        if attn_weights.struct_info.dtype != query_states.struct_info.dtype:
-            attn_weights = astype(attn_weights, query_states.struct_info.dtype)
-        attn_output = nn.emit(matmul(attn_weights, value_states))
-
-        tvm.ir.assert_structural_equal(
-            attn_output.struct_info.shape.values,
-            (
-                bsz,
-                tvm.tir.IntImm("int64", self.num_heads),
-                q_len,
-                tvm.tir.IntImm("int64", self.head_dim),
-            ),
-        )
-
-        attn_output = permute_dims(attn_output, [0, 2, 1, 3])
+        attn_output = nn.emit(reshape(attn_output, q_states_shape))
         attn_output = reshape(attn_output, (bsz, q_len, self.hidden_size))
 
         attn_output = self.o_proj(attn_output)
@@ -661,6 +637,20 @@ def create_softmax_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
         bb.emit_func_output(gv, [logits, temperature])
 
 
+def create_flash_attn_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
+    from .flash_attn import flash_attn_gen
+
+    hidden_size = config.hidden_size
+    num_heads = config.num_attention_heads
+    head_dim = hidden_size // num_heads
+    func = flash_attn_gen(num_heads, head_dim, True, config.dtype)
+    gv = bb.add_func(func, "flashattn")
+    return gv
+
+
+flash_attn_func = None
+
+
 def get_model(args, hf_config):
     from transformers import AutoModelForCausalLM  # type: ignore[import]
 
@@ -675,6 +665,8 @@ def get_model(args, hf_config):
             config.max_sequence_length = max_seq_len
 
         bb = relax.BlockBuilder()
+        global flash_attn_func
+        flash_attn_func = create_flash_attn_func(bb, config)
         create_encoding_func(bb, config)
         create_decoding_func(bb, config)
         create_kv_cache_func(bb, config)
