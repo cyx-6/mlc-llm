@@ -17,13 +17,11 @@ def flash_attn_raw(
     sm_scale = 1.0 / (float(D) ** 0.5)
     eps = 1e-5
     H = T.int64(H)
-    D = T.int64(H)
+    D = T.int64(D)
 
     @T.prim_func
     def func(q: T.handle, k: T.handle, v: T.handle, o: T.handle) -> None:
-        T.func_attr(
-            {"op_pattern": 8, "tir.noalias": T.bool(True), "tir.is_scheduled": 1}
-        )
+        T.func_attr({"op_pattern": 8, "tir.noalias": T.bool(True), "tir.is_scheduled": 1})
         M = T.int64()
         N = T.int64()
         Q = T.match_buffer(q, (M, H, D), dtype)
@@ -48,24 +46,14 @@ def flash_attn_raw(
                 with T.block("flashattn"):
                     vi, vh, vjo = T.axis.remap("SSR", [i, h, jo])
 
-                    m_local = T.alloc_buffer(
-                        ((T.int64(1)),), dtype="float32", scope="local"
-                    )
-                    a_sum_local = T.alloc_buffer(
-                        ((T.int64(1)),), dtype="float32", scope="local"
-                    )
+                    m_local = T.alloc_buffer(((T.int64(1)),), dtype="float32", scope="local")
+                    a_sum_local = T.alloc_buffer(((T.int64(1)),), dtype="float32", scope="local")
                     o = T.alloc_buffer((D,), dtype="float32", scope="local")
-                    K_shared_pad = T.alloc_buffer(
-                        (T.int64(32), D), dtype=dtype, scope="shared"
-                    )
-                    V_shared_pad = T.alloc_buffer(
-                        (T.int64(32), D), dtype=dtype, scope="shared"
-                    )
+                    K_shared_pad = T.alloc_buffer((T.int64(32), D), dtype=dtype, scope="shared")
+                    V_shared_pad = T.alloc_buffer((T.int64(32), D), dtype=dtype, scope="shared")
                     X = T.alloc_buffer((T.int64(32),), dtype="float32", scope="shared")
                     A = T.alloc_buffer((T.int64(32),), dtype="float32", scope="shared")
-                    X_mask = T.alloc_buffer(
-                        (T.int64(32),), dtype="float32", scope="shared"
-                    )
+                    X_mask = T.alloc_buffer((T.int64(32),), dtype="float32", scope="shared")
 
                     with T.init():
                         m_now[vh, vi] = T.min_value("float32")
@@ -115,8 +103,7 @@ def flash_attn_raw(
                             vji = T.axis.spatial(T.int64(32), ji)
                             X_mask[vji] = X[vji] + T.if_then_else(
                                 if_decoder(
-                                    (vjo * 32 + vji >= N)
-                                    or (M - vi > N - vjo * 32 - vji),
+                                    (vjo * 32 + vji >= N) or (M - vi > N - vjo * 32 - vji),
                                     vjo * 32 + vji >= N,
                                 ),
                                 T.min_value("float32"),
