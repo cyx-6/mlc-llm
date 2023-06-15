@@ -73,21 +73,21 @@ class ChatState : ObservableObject {
             self.updateReply(role: MessageRole.bot, message: "[System] Initalize...")
             backend.unload();
             let vram = os_proc_available_memory()
-            if (vram < estimatedVRAMReq) {
-                let reqMem = String (
-                    format: "%.1fGB", Double(estimatedVRAMReq) / Double(1 << 20)
-                )
-                let errMsg = (
-                    "Sorry, the system cannot provide " + reqMem + " VRAM as requested to the app, " +
-                    "so we cannot initialize this model on this device."
-                )
-                DispatchQueue.main.sync {
-                    self.messages.append(MessageData(role: MessageRole.bot, message: errMsg))
-                    self.reloadReady = false
-                    self.inProgress = true
-                }
-                return
-            }
+//            if (vram < estimatedVRAMReq) {
+//                let reqMem = String (
+//                    format: "%.1fGB", Double(estimatedVRAMReq) / Double(1 << 20)
+//                )
+//                let errMsg = (
+//                    "Sorry, the system cannot provide " + reqMem + " VRAM as requested to the app, " +
+//                    "so we cannot initialize this model on this device."
+//                )
+//                DispatchQueue.main.sync {
+//                    self.messages.append(MessageData(role: MessageRole.bot, message: errMsg))
+//                    self.reloadReady = false
+//                    self.inProgress = true
+//                }
+//                return
+//            }
             backend.reload(modelLib, modelPath: modelPath)
             self.reloadReady = true
             self.updateReply(role: MessageRole.bot, message: "[System] Ready to chat")

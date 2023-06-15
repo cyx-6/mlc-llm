@@ -379,13 +379,7 @@
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"-Wl,-all_load",
-					"-lmodel_iphone",
-					"-lmlc_llm",
-					"-ltvm_runtime",
 					"-Wl,-noall_load",
-					"-ltokenizers_cpp",
-					"-lsentencepiece",
-					"-ltokenizers_c",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = mlc.Chat;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -432,19 +426,14 @@
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"-Wl,-all_load",
-					"-lmodel_iphone",
-					"-lmlc_llm",
-					"-ltvm_runtime",
 					"-Wl,-noall_load",
-					"-ltokenizers_cpp",
-					"-lsentencepiece",
-					"-ltokenizers_c",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = mlc.Chat;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
