@@ -22,6 +22,9 @@ from mlc_llm.relax_model import (
     param_manager,
     rwkv,
 )
+from tvm.relax.backend.contrib.cutlass import partition_for_cutlass
+from mlc_llm.transform import fuse_split_rotary_embedding, rewrite_attention
+
 
 @dataclass
 class BuildArgs:
@@ -342,6 +345,17 @@ def mod_transform_before_build(
             model_names = ["embed", "prefill_with_embed"] + model_names[1:]
     assert "transform_params" in [gv.name_hint for gv in mod.get_global_vars()]
 
+    debug_dump_script(mod, "mod_before_rewrite.py", args)
+    mod["prefill"] = rewrite_attention(mod["prefill"])
+    mod["decode"] = rewrite_attention(mod["decode"])
+
+    mod = partition_for_cutlass(mod)
+    mod = relax.transform.RunCodegen(
+        {"cutlass": {"sm": 80, "find_first_valid": False}},
+        entry_functions=model_names + ["transform_params"]
+    )(mod)
+    debug_dump_script(mod, "mod_after_rewrite.py", args)
+
     mod = mlc_llm.transform.FuseDecodeTranspose()(mod)  # pylint: disable=not-callable
     mod = mlc_llm.transform.FuseTransposeMatmul()(mod)  # pylint: disable=not-callable
     mod = relax.pipeline.get_pipeline()(mod)  # pylint: disable=no-value-for-parameter
@@ -425,7 +439,9 @@ def build(mod_deploy: tvm.IRModule, args: argparse.Namespace) -> None:
 
     debug_dump_script(mod_deploy, "mod_build_stage.py", args)
 
-    ex = relax.build(mod_deploy, args.target, system_lib=args.system_lib)
+    # ex = relax.build(mod_deploy, args.target, system_lib=args.system_lib)
+    with tvm.transform.PassContext(config={"relax.backend.use_cuda_graph": True}):
+        ex = relax.build(mod_deploy, args.target, system_lib=args.system_lib)
 
     output_filename = (
         f"{args.model}-{args.quantization.name}-{target_kind}.{args.lib_format}"

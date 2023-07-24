@@ -17,6 +17,11 @@ if __name__ == "__main__":
             "USE_OPENCL",
             "Use OpenCL? (y/n) ",
         ),
+        Backend(
+            "CUTLASS",
+            "USE_CUTLASS",
+            "Use CUTLASS? (y/n) ",
+        ),
     ]
 
     for backend in backends:

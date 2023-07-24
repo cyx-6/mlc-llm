@@ -5,3 +5,5 @@ from .decode_transpose import FuseDecodeTranspose
 from .lift_tir_global_buffer_alloc import LiftTIRGlobalBufferAlloc
 from .reorder_transform_func import ReorderTransformFunc
 from .transpose_matmul import FuseTransposeMatmul
+from .fuse_split_rotary_embedding import fuse_split_rotary_embedding
+from .rewrite_attention import rewrite_attention

@@ -161,7 +161,7 @@ def deploy_to_pipeline(args) -> None:  # pylint: disable=too-many-locals
     device.sync()
     end = time.time()
     fcache_view = tvm.get_global_func("vm.builtin.attention_kv_cache_view")
-    first_k_cache = fcache_view(kv_caches[0], ShapeTuple([7, 32, 128]))
+    first_k_cache = fcache_view(kv_caches[0], ShapeTuple([7, 8, 128]))
     if args.debug_dump:
         print(f"output kv_cache[0]:\n{first_k_cache.numpy().transpose(1, 0, 2)}")
         print(f"output logits:\n{logits.numpy()}")
