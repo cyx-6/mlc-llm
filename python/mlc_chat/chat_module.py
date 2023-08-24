@@ -98,6 +98,7 @@ class ConvConfig:
         if self.messages is not None and self.offset is None:
             self.offset = len(self.messages)
 
+
 @dataclass
 class ChatConfig:
     r"""A dataclass that represents user-defined partial configuration for the
@@ -177,10 +178,13 @@ class ChatConfig:
 
     @classmethod
     def _from_json(chat_config_cls, json_obj: dict):
-        return chat_config_cls(**{
-            k: v for k, v in json_obj.items()
-            if k in inspect.signature(chat_config_cls).parameters
-        })
+        return chat_config_cls(
+            **{
+                k: v
+                for k, v in json_obj.items()
+                if k in inspect.signature(chat_config_cls).parameters
+            }
+        )
 
 
 class PlaceInPrompt(Enum):
@@ -598,6 +602,8 @@ class ChatModule:
         self._evaluate_func = chat_mod["evaluate"]
         self._get_role0_func = chat_mod["get_role0"]
         self._get_role1_func = chat_mod["get_role1"]
+        self._apply_lora = chat_mod["apply_lora"]
+        self._load_tokenizer = chat_mod["load_tokenizer"]
 
         # 3. Look up model_path
         self.model_path, self.config_file_path = _get_model_path(model)
@@ -609,12 +615,15 @@ class ChatModule:
         self.lib_path = _get_lib_module(
             model, self.model_path, self.chat_config, lib_path, device_name, self.config_file_path
         )
+        self.lora_lib_path = tvm.runtime.load_module(
+            os.path.abspath(f"dist/{model}/lora_kernels.so")
+        )
 
         # 6. Call reload
         user_chat_config_json_str = _convert_chat_config_to_json_str(
             chat_config, self.chat_config.conv_template
         )
-        self._reload(self.lib_path, self.model_path, user_chat_config_json_str)
+        self._reload(self.lib_path, self.lora_lib_path, self.model_path, user_chat_config_json_str)
 
     def generate(self, prompt: str, progress_callback=None) -> str:
         r"""A high-level method that returns the full response from the chat module given a user prompt.
@@ -783,7 +792,7 @@ class ChatModule:
 
         return self._raw_generate_func(prompt, generate_length)
 
-    def _reload(self, lib: str, model_path: str, app_config_json: str = ""):
+    def _reload(self, lib: str, lora_lib: str, model_path: str, app_config_json: str = ""):
         r"""Reload the chat module from the given library and model path.
 
         Parameters
@@ -795,7 +804,7 @@ class ChatModule:
         app_config_json: str
             The partial config that is used to partially override the model configuration.
         """
-        self._reload_func(lib, model_path, app_config_json)
+        self._reload_func(lib, lora_lib, model_path, app_config_json)
 
     def _unload(self):
         r"""Unload the chat module and clear memory of all loaded models."""
@@ -931,3 +940,41 @@ class ChatModule:
     def _process_system_prompts(self):
         r"""Pre-process by prefilling the system prompts, running prior to any user input."""
         self._process_system_prompts_func()
+
+    def apply_lora(self, path: str):
+        import torch
+        from collections import defaultdict
+
+        with open(os.path.join(path, "adapter_config.json"), "r") as param_idx_file:
+            lora_config = json.load(param_idx_file)
+        scale = 1.0 * lora_config["lora_alpha"] / lora_config["r"]
+
+        with open(os.path.join(self.model_path, "../param_idx.json"), "r") as param_idx_file:
+            param_info = json.load(param_idx_file)
+        lora_params = torch.load(os.path.join(path, "adapter_model.bin"))
+        lora_ndarray = defaultdict(dict)
+        for k, v in lora_params.items():
+            k = k.replace("base_model.model.", "")
+            if k.count("lora_A"):
+                lora_ndarray[k.replace("lora_A.", "")]["lora_a"] = tvm.runtime.ndarray.from_dlpack(
+                    v.to(torch.float16)
+                )
+            elif k.count("lora_B"):
+                lora_ndarray[k.replace("lora_B.", "")]["lora_b"] = tvm.runtime.ndarray.from_dlpack(
+                    (v * scale).to(torch.float16)
+                )
+            else:
+                raise ValueError("Unexpected param in lora weight")
+        del lora_params
+
+        for idx, info in param_info.items():
+            for torch_name in info["torch_names"]:
+                if torch_name in lora_ndarray:
+                    self._apply_lora(
+                        torch_name.replace(".", "_"),
+                        int(idx),
+                        info["qidx"],
+                        lora_ndarray[torch_name]["lora_b"],
+                        lora_ndarray[torch_name]["lora_a"],
+                    )
+        # self._load_tokenizer(path)

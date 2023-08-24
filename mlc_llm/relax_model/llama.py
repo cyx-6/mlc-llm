@@ -61,9 +61,7 @@ class Linear(nn.Module):
     def __init__(self, in_features, out_features, dtype: str, bias=True):
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = nn.Parameter(
-            (out_features, in_features), dtype=dtype, name="linear_weight"
-        )
+        self.weight = nn.Parameter((out_features, in_features), dtype=dtype, name="linear_weight")
         if bias:
             self.bias = nn.Parameter((out_features,), dtype=dtype, name="linear_bias")
         else:
@@ -107,11 +105,7 @@ class LlamaRMSNorm(nn.Module):
             is_float32 = x.dtype == "float32"
 
             def f_square(x):
-                return (
-                    tir.Cast("float32", x) * tir.Cast("float32", x)
-                    if not is_float32
-                    else x * x
-                )
+                return tir.Cast("float32", x) * tir.Cast("float32", x) if not is_float32 else x * x
 
             k = te.reduce_axis((0, x.shape[2]), name="k")
             square_sum = te.compute(
@@ -124,9 +118,7 @@ class LlamaRMSNorm(nn.Module):
                 x_val = x[bsz, i, k]
                 if not is_float32:
                     x_val = tir.Cast("float32", x_val)
-                return x_val / tir.sqrt(
-                    square_sum[bsz, i] / x.shape[2] + self.variance_epsilon
-                )
+                return x_val / tir.sqrt(square_sum[bsz, i] / x.shape[2] + self.variance_epsilon)
 
             def f_mul_cast(x, y):
                 value = x * y
@@ -140,9 +132,7 @@ class LlamaRMSNorm(nn.Module):
                 name="rms_norm",
             )
 
-        return nn.emit_te(
-            f_rms_norm, hidden_states, self.weight, primfunc_name_hint="rms_norm"
-        )
+        return nn.emit_te(f_rms_norm, hidden_states, self.weight, primfunc_name_hint="rms_norm")
 
 
 class LlamaMLP(nn.Module):
@@ -153,22 +143,12 @@ class LlamaMLP(nn.Module):
 
         self.combine_matmul = config.combine_matmul
         if self.combine_matmul:
-            self.gate_up_proj = Linear(
-                hidden_size, 2 * intermediate_size, dtype=dtype, bias=False
-            )
-            self.down_proj = Linear(
-                intermediate_size, hidden_size, dtype=dtype, bias=False
-            )
+            self.gate_up_proj = Linear(hidden_size, 2 * intermediate_size, dtype=dtype, bias=False)
+            self.down_proj = Linear(intermediate_size, hidden_size, dtype=dtype, bias=False)
         else:
-            self.gate_proj = Linear(
-                hidden_size, intermediate_size, dtype=dtype, bias=False
-            )
-            self.down_proj = Linear(
-                intermediate_size, hidden_size, dtype=dtype, bias=False
-            )
-            self.up_proj = Linear(
-                hidden_size, intermediate_size, dtype=dtype, bias=False
-            )
+            self.gate_proj = Linear(hidden_size, intermediate_size, dtype=dtype, bias=False)
+            self.down_proj = Linear(intermediate_size, hidden_size, dtype=dtype, bias=False)
+            self.up_proj = Linear(hidden_size, intermediate_size, dtype=dtype, bias=False)
 
     def forward(self, x):
         if self.combine_matmul:
@@ -194,9 +174,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, offset: int = 0):
 
         def rotary_compute(*idx):
             i, j = idx[-3], idx[-1]
-            return cos[offset + i, j] * tensor(*idx) + sin[
-                offset + i, j
-            ] * tvm.tir.Select(
+            return cos[offset + i, j] * tensor(*idx) + sin[offset + i, j] * tvm.tir.Select(
                 j >= n_feat_half,
                 tensor[idx[0], i, idx[2], j - n_feat_half],
                 -tensor[idx[0], i, idx[2], j + n_feat_half],
@@ -255,9 +233,7 @@ class LlamaAttention(nn.Module):
                 bias=False,
             )
 
-        self.o_proj = Linear(
-            self.hidden_size, self.hidden_size, dtype=dtype, bias=False
-        )
+        self.o_proj = Linear(self.hidden_size, self.hidden_size, dtype=dtype, bias=False)
 
     def forward(
         self,
@@ -288,8 +264,7 @@ class LlamaAttention(nn.Module):
                     self.query_key_value_proj(hidden_states),
                     indices_or_sections=[
                         self.num_query_heads * self.head_dim,
-                        (self.num_query_heads + self.num_key_value_heads)
-                        * self.head_dim,
+                        (self.num_query_heads + self.num_key_value_heads) * self.head_dim,
                     ],
                     axis=-1,
                 )
@@ -471,9 +446,7 @@ def _make_causal_mask(input_ids_shape, dtype, src_len):
     def min_max_triu_te():
         return te.compute(
             (tgt_len, tgt_len),
-            lambda i, j: tvm.tir.Select(
-                j > i, tvm.tir.min_value(dtype), tvm.tir.max_value(dtype)
-            ),
+            lambda i, j: tvm.tir.Select(j > i, tvm.tir.min_value(dtype), tvm.tir.max_value(dtype)),
             name="make_diag_mask_te",
         )
 
@@ -498,9 +471,7 @@ def _make_causal_mask(input_ids_shape, dtype, src_len):
 
 class LlamaEmbedTokens(nn.Module):
     def __init__(self, config: LlamaConfig):
-        self.embed_tokens = Embedding(
-            config.vocab_size, config.hidden_size, dtype=config.dtype
-        )
+        self.embed_tokens = Embedding(config.vocab_size, config.hidden_size, dtype=config.dtype)
 
     def forward(self, input_ids: relax.Expr):
         inputs_embeds = self.embed_tokens(input_ids)
@@ -524,16 +495,12 @@ class LlamaModel(nn.Module):
         self.embed_tokens = None
 
         if not sep_embed:
-            self.embed_tokens = Embedding(
-                config.vocab_size, config.hidden_size, dtype=config.dtype
-            )
+            self.embed_tokens = Embedding(config.vocab_size, config.hidden_size, dtype=config.dtype)
 
         self.layers = ModuleList(
             [LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)]
         )
-        self.norm = LlamaRMSNorm(
-            config.hidden_size, dtype=config.dtype, eps=config.rms_norm_eps
-        )
+        self.norm = LlamaRMSNorm(config.hidden_size, dtype=config.dtype, eps=config.rms_norm_eps)
 
     def _prepare_decoder_attention_mask(self, input_shape, src_len, dtype):
         # create causal mask
@@ -604,9 +571,7 @@ class LlamaModel(nn.Module):
 class LlamaForCausalLM(nn.Module):
     def __init__(self, config: LlamaConfig, sep_embed: bool = False):
         self.model = LlamaModel(config, sep_embed)
-        self.lm_head = Linear(
-            config.hidden_size, config.vocab_size, dtype=config.dtype, bias=False
-        )
+        self.lm_head = Linear(config.hidden_size, config.vocab_size, dtype=config.dtype, bias=False)
 
         ############ Rotary embedding constants ############
         assert config.hidden_size % config.num_attention_heads == 0
@@ -643,18 +608,14 @@ class LlamaForCausalLM(nn.Module):
                 name="slice",
             )
 
-        logits = self.lm_head(
-            nn.emit_te(te_slicing, hidden_states, primfunc_name_hint="slice")
-        )
+        logits = self.lm_head(nn.emit_te(te_slicing, hidden_states, primfunc_name_hint="slice"))
         if logits.struct_info.dtype != "float32":
             logits = nn.emit(relax.op.astype(logits, "float32"))
 
         return logits, key_value_cache
 
 
-def get_param_quant_kind(
-    name: str, param_info: relax.TensorStructInfo
-) -> ParamQuantKind:
+def get_param_quant_kind(name: str, param_info: relax.TensorStructInfo) -> ParamQuantKind:
     if "embed_tokens" in name:
         return ParamQuantKind.embedding_table
     elif "lm_head.weight" in name:
@@ -677,9 +638,7 @@ def create_embed_func(
     seq_len = tvm.tir.Var("n", "int64")
     with bb.function(func_name):
         model = LlamaEmbedTokensWrapper(config)
-        param_manager.register_params(
-            model, func_name, quant_scheme, get_param_quant_kind
-        )
+        param_manager.register_params(model, func_name, quant_scheme, get_param_quant_kind)
 
         input_ids = nn.Placeholder((bsz, seq_len), dtype="int32", name="input_ids")
         with bb.dataflow():
@@ -708,20 +667,14 @@ def create_encoding_func(
     hidden_size = config.hidden_size
     with bb.function(func_name):
         model = LlamaForCausalLM(config, sep_embed)
-        param_manager.register_params(
-            model, func_name, quant_scheme, get_param_quant_kind
-        )
+        param_manager.register_params(model, func_name, quant_scheme, get_param_quant_kind)
 
         inputs = (
-            nn.Placeholder(
-                (bsz, seq_len, hidden_size), dtype=config.dtype, name="inputs_embeds"
-            )
+            nn.Placeholder((bsz, seq_len, hidden_size), dtype=config.dtype, name="inputs_embeds")
             if sep_embed
             else nn.Placeholder((bsz, seq_len), dtype="int32", name="input_ids")
         )
-        all_seq_len_shape = relax.Var(
-            "all_seq_len", relax.ShapeStructInfo((all_seq_len,))
-        )
+        all_seq_len_shape = relax.Var("all_seq_len", relax.ShapeStructInfo((all_seq_len,)))
         past_key_values = relax.Var(
             "kv_cache",
             relax.TupleStructInfo(
@@ -758,14 +711,10 @@ def create_decoding_func(
 
     with bb.function(func_name):
         model = LlamaForCausalLM(config)
-        param_manager.register_params(
-            model, func_name, quant_scheme, get_param_quant_kind
-        )
+        param_manager.register_params(model, func_name, quant_scheme, get_param_quant_kind)
 
         input_ids = nn.Placeholder((bsz, 1), dtype="int32", name="input_ids")
-        all_seq_len_shape = relax.Var(
-            "all_seq_len", relax.ShapeStructInfo((all_seq_len,))
-        )
+        all_seq_len_shape = relax.Var("all_seq_len", relax.ShapeStructInfo((all_seq_len,)))
         past_key_values = relax.Var(
             "kv_cache",
             relax.TupleStructInfo(
@@ -823,9 +772,7 @@ def create_kv_cache_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
 
 def create_softmax_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
     with bb.function("softmax_with_temperature"):
-        logits = nn.Placeholder(
-            (1, 1, config.vocab_size), dtype="float32", name="logits"
-        )
+        logits = nn.Placeholder((1, 1, config.vocab_size), dtype="float32", name="logits")
         temperature = nn.Placeholder((), dtype="float32", name="temperature")
         with bb.dataflow():
             div = bb.emit(relax.op.divide(logits, temperature))
@@ -930,12 +877,77 @@ def get_model(args, hf_config):
             raise ValueError("Unexpected param loading")
         return np.concatenate(torch_params, axis=0).astype(dtype)
 
+    def f_apply_lora(
+        bb: relax.BlockBuilder,
+        relax_pname: str,
+        torch_pname: str,
+        param: relax.Var,
+        lora_a: relax.Var,
+        lora_b: relax.Var,
+    ) -> relax.Var:
+        if f_convert_pname_fwd(relax_pname) == [relax_pname]:
+            return bb.emit(relax.op.add(param, relax.op.matmul(lora_a, lora_b)))
+        else:
+            if "query_key_value_proj" in relax_pname:
+                num_query_heads = config.num_attention_heads
+                head_dim = config.hidden_size // num_query_heads
+                num_key_value_heads = (
+                    config.num_key_value_heads is None
+                    and config.num_attention_heads
+                    or config.num_key_value_heads
+                )
+                qkv_proj = nn.emit(
+                    relax.op.split(
+                        param,
+                        indices_or_sections=[
+                            num_query_heads * head_dim,
+                            (num_query_heads + num_key_value_heads) * head_dim,
+                        ],
+                        axis=0,
+                    )
+                )
+                q_proj = relax.TupleGetItem(qkv_proj, 0)
+                k_proj = relax.TupleGetItem(qkv_proj, 1)
+                v_proj = relax.TupleGetItem(qkv_proj, 2)
+                if "q_proj" in torch_pname:
+                    q_proj = bb.emit(relax.op.add(q_proj, relax.op.matmul(lora_a, lora_b)))
+                elif "k_proj" in torch_pname:
+                    k_proj = bb.emit(relax.op.add(k_proj, relax.op.matmul(lora_a, lora_b)))
+                elif "v_proj" in torch_pname:
+                    v_proj = bb.emit(relax.op.add(v_proj, relax.op.matmul(lora_a, lora_b)))
+                else:
+                    raise ValueError("Unexpected torch param in query_key_value_proj")
+                return bb.emit(relax.op.concat([q_proj, k_proj, v_proj], axis=0))
+            elif "gate_up_proj" in relax_pname:
+                num_key_value_heads = (
+                    config.num_key_value_heads is None
+                    and config.num_attention_heads
+                    or config.num_key_value_heads
+                )
+                gate_up_proj = nn.emit(
+                    relax.op.split(
+                        param,
+                        indices_or_sections=2,
+                        axis=0,
+                    )
+                )
+                gate_proj = relax.TupleGetItem(gate_up_proj, 0)
+                up_proj = relax.TupleGetItem(gate_up_proj, 1)
+                if "gate_proj" in torch_pname:
+                    gate_proj = bb.emit(relax.op.add(gate_proj, relax.op.matmul(lora_a, lora_b)))
+                elif "up_proj" in torch_pname:
+                    up_proj = bb.emit(relax.op.add(up_proj, relax.op.matmul(lora_a, lora_b)))
+                else:
+                    raise ValueError("Unexpected torch param in gate_up_proj")
+                return bb.emit(relax.op.concat([gate_proj, up_proj], axis=0))
+
     param_manager.set_param_loading_func(
         args.model_path,
         args.use_safetensors,
         f_convert_pname_fwd,
         f_convert_param_bkwd,
         f_compute_relax_param,
+        f_apply_lora,
     )
 
     device = tvm.cpu()
@@ -952,8 +964,7 @@ def get_model(args, hf_config):
 
     head_dim = config.hidden_size / config.num_attention_heads
     inv_freq = 1.0 / (
-        config.position_embedding_base
-        ** (np.arange(0, head_dim, 2).astype("float32") / head_dim)
+        config.position_embedding_base ** (np.arange(0, head_dim, 2).astype("float32") / head_dim)
     )
     # Set the cached sin/cos to the max sequence length.
     # This will be eliminated further with online rotary embedding calculation.

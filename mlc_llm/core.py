@@ -195,9 +195,11 @@ class BuildArgs:
     no_cublas: bool = field(
         default=False,
         metadata={
-            "help": ("Disable the step that offloads matmul to cuBLAS. Without this flag, "
-                     "matmul will be offloaded to cuBLAS if quantization mode is q0f16 or q0f32, "
-                     "target is CUDA and TVM has been built with cuBLAS enbaled."),
+            "help": (
+                "Disable the step that offloads matmul to cuBLAS. Without this flag, "
+                "matmul will be offloaded to cuBLAS if quantization mode is q0f16 or q0f32, "
+                "target is CUDA and TVM has been built with cuBLAS enbaled."
+            ),
             "action": "store_true",
         },
     )
@@ -359,9 +361,13 @@ def mod_transform_before_build(
 
     if "num_attention_heads" in config and "hidden_size" in config:
         if args.max_seq_len != -1:
-            mod = fuse_split_rotary_embedding(mod, config["num_attention_heads"], config["hidden_size"], args.max_seq_len)
+            mod = fuse_split_rotary_embedding(
+                mod, config["num_attention_heads"], config["hidden_size"], args.max_seq_len
+            )
         else:
-            mod = fuse_split_rotary_embedding(mod, config["num_attention_heads"], config["hidden_size"])
+            mod = fuse_split_rotary_embedding(
+                mod, config["num_attention_heads"], config["hidden_size"]
+            )
 
     if args.target_kind == "cuda":
         patterns = []

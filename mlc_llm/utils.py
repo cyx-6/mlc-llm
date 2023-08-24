@@ -3,12 +3,12 @@ import argparse
 import json
 import os
 import shutil
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import tvm
 from tvm import relax
 
-from .quantization import quantization_schemes
+from .quantization import quantization_schemes, NoQuantizationSpec
 from .relax_model import param_manager
 from .transform import ReorderTransformFunc
 
@@ -146,6 +146,7 @@ def debug_dump_benchmark_script(
         outfile.write("\n" + "\n".join(stmt) + "\n")
     print(f"Dump benchmarking script to {dump_path}.")
 
+
 def debug_load_script(name: str, args: argparse.Namespace):
     input_path = os.path.join(args.artifact_path, "debug", name)
     lib = {"__file__": input_path}
@@ -205,6 +206,7 @@ def convert_weights(
     loaded_torch_bins: Set[str] = set()
     cached_relax_params: Dict[int, tvm.nd.NDArray] = {}
     cached_torch_params: Dict[str, Any] = {}
+    torch_params_sinfo: Dict[str, Tuple[Any, Any]] = {}
 
     get_item, set_item = param_mgr.get_param_loading_functions(
         model_params,
@@ -213,6 +215,7 @@ def convert_weights(
         loaded_torch_bins,
         cached_relax_params,
         cached_torch_params,
+        torch_params_sinfo,
         device,
         device_cpu,
     )
@@ -228,7 +231,132 @@ def convert_weights(
     print("Start computing and quantizing weights... This may take a while.")
     vm["transform_params"]()
     print("Finish computing and quantizing weights.")
+    dump_lora_kernels(param_mgr, args, torch_params_sinfo)
     return loaded_params
+
+
+def create_lora_kernels(
+    param_mgr: param_manager.ParamManager,
+    torch_params_sinfo: Dict[str, Tuple[Any, Any]],
+) -> tvm.IRModule:
+    bb = relax.BlockBuilder()
+    for pidx, name in enumerate(param_mgr.param_names):
+        param = param_mgr.params[name]
+        f_quantize = param.quant_spec.get_quantize_func(param.param_info)
+        quantized_param_info = [
+            param_mgr.quantized_param_info.fields[i] for i in param_mgr.param2qrange[param]
+        ]
+        f_dequantize = param.quant_spec.get_dequantize_func(param.param_info, quantized_param_info)
+        if isinstance(param.quant_spec, NoQuantizationSpec):
+
+            def f_quantize_fallback(_, x):
+                assert len(x) == 1
+                return relax.Tuple(x)
+
+            def f_dequantize_fallback(_, x):
+                assert len(x) == 1
+                return x[0]
+
+            f_quantize = f_quantize_fallback
+            f_dequantize = f_dequantize_fallback
+
+        if param.param_info.ndim == 2 and f_quantize and f_dequantize:
+            quantized_sinfo = relax.TupleStructInfo(quantized_param_info)
+            quantized_var = relax.Var("quantized", quantized_sinfo)
+            for torch_pname in param_mgr.f_convert_pname_fwd(name):
+                if torch_pname not in torch_params_sinfo:
+                    continue
+                shape, dtype = torch_params_sinfo[torch_pname]
+                r = tvm.tir.Var("r", "int64")
+                lora_a = relax.Var("lora_a", relax.TensorStructInfo((int(shape[0]), r), "float16"))
+                lora_b = relax.Var("lora_b", relax.TensorStructInfo((r, int(shape[1])), "float16"))
+                with bb.function(f"{torch_pname}_{pidx}", [quantized_var, lora_a, lora_b]):
+                    with bb.dataflow():
+                        dequantized = bb.emit(
+                            f_dequantize(
+                                bb,
+                                [
+                                    relax.TupleGetItem(quantized_var, i)
+                                    for i in range(len(quantized_param_info))
+                                ],
+                            )
+                        )
+                        applied_lora = param_mgr.f_apply_lora(
+                            bb, name, torch_pname, dequantized, lora_a, lora_b
+                        )
+                        quantized = bb.emit(f_quantize(bb, [applied_lora]))
+                        output = bb.emit(quantized)
+                    bb.emit_func_output(output)
+    mod = bb.get()
+    return mod
+
+
+def dump_param_idx(param_mgr: param_manager.ParamManager, artifact_path: str):
+    output_info = {}
+    for pidx, name in enumerate(param_mgr.param_names):
+        param = param_mgr.params[name]
+        output_info[pidx] = {
+            "qidx": [i for i in param_mgr.param2qrange[param]],
+            "torch_names": [torch_name for torch_name in param_mgr.f_convert_pname_fwd(name)],
+        }
+    with open(f"{artifact_path}/param_idx.json", "w") as output_file:
+        json.dump(output_info, output_file, indent=2)
+
+
+def dump_lora_kernels(
+    param_mgr: param_manager.ParamManager,
+    args: argparse.Namespace,
+    torch_params_sinfo: Dict[str, Tuple[Any, Any]],
+):
+    from tvm.relax.transform import LegalizeOps
+    from tvm import dlight as dl
+    import mlc_llm
+
+    mod = create_lora_kernels(param_mgr, torch_params_sinfo)
+
+    dump_param_idx(param_mgr, args.artifact_path)
+
+    debug_dump_script(mod, "mod_lora_before_build.py", args)
+
+    mod = LegalizeOps()(mod)
+
+    target_kind = args.target_kind
+    if args.system_lib_prefix:
+        mod = mod.with_attrs({"system_lib_prefix": args.system_lib_prefix})
+
+    if target_kind != "cpu":
+        dispatch_target = (
+            args.target
+            if args.target_kind != "webgpu"
+            else tvm.target.Target("apple/m1-gpu-restricted")
+        )
+        with dispatch_target:
+            if args.target_kind == "android":
+                mod = mlc_llm.dispatch.DispatchTIROperatorAdreno()(
+                    mod
+                )  # pylint: disable=not-callable
+            mod = dl.ApplyDefaultSchedule(  # pylint: disable=not-callable
+                dl.gpu.Matmul(),
+                dl.gpu.GEMV(),
+                dl.gpu.Reduction(),
+                dl.gpu.GeneralReduction(),
+                dl.gpu.Fallback(),
+            )(mod)
+            mod = tvm.tir.transform.ForceNarrowIndexToInt32()(mod)
+
+    # use_cuda_graph = args.use_cuda_graph and target_kind == "cuda"
+    debug_dump_script(mod, "mod_lora_deploy.py", args)
+
+    # with tvm.transform.PassContext(config={"relax.backend.use_cuda_graph": use_cuda_graph}):
+    # The num_input attribute is needed to capture transformed weights passed as input
+    # into a cuda graph.
+    ex = relax.build(mod, args.target, system_lib=args.system_lib)
+
+    output_filename = f"lora_kernels.{args.lib_format}"
+
+    args.lib_path = os.path.join(args.artifact_path, output_filename)
+    ex.export_library(args.lib_path, **args.export_kwargs)
+    print(f"Finish exporting runtime quantization to {args.lib_path}")
 
 
 def save_params(params: List[tvm.nd.NDArray], artifact_path: str) -> None:

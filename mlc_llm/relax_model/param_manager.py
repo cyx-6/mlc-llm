@@ -177,6 +177,9 @@ class ParamManager:
     f_convert_pname_fwd: Callable[[str], List[str]]
     f_convert_param_bkwd: Callable[[str, Any], Optional[List[Tuple[str, Any]]]]
     f_compute_relax_param: Callable[[str, List[Any]], Any]
+    f_apply_lora: Callable[
+        [relax.BlockBuilder, str, str, relax.Var, relax.Var, relax.Var], relax.Var
+    ]
 
     model_path: str
     use_safetensors: bool
@@ -281,6 +284,9 @@ class ParamManager:
             [str, Any], Optional[List[Tuple[str, Any]]]
         ] = lambda pname, torch_param: [(pname, torch_param)],
         f_compute_relax_param: Callable[[str, List[Any]], Any] = f_default_compute_relax_param,
+        f_apply_lora: Callable[
+            [relax.BlockBuilder, str, str, relax.Var, relax.Var, relax.Var], relax.Var
+        ] = None,
         *,
         no_lazy_param_loading: bool = False,
     ) -> None:
@@ -316,6 +322,7 @@ class ParamManager:
         self.f_convert_pname_fwd = f_convert_pname_fwd
         self.f_convert_param_bkwd = f_convert_param_bkwd
         self.f_compute_relax_param = f_compute_relax_param
+        self.f_apply_lora = f_apply_lora
 
         self.model_path = model_path
         self.use_safetensors = use_safetensors
@@ -467,6 +474,7 @@ class ParamManager:
         loaded_torch_bins: Set[str],
         cached_relax_params: Dict[int, tvm.nd.NDArray],
         cached_torch_params: Dict[str, Any],
+        torch_params_sinfo: Dict[str, Tuple[Any, Any]],
         device: Device,
         device_cpu: Device,
     ) -> Tuple[Callable, Callable]:
@@ -527,6 +535,10 @@ class ParamManager:
                 )
             torch_param_names = list(torch_params.keys())
             for torch_param_name in torch_param_names:
+                torch_params_sinfo[torch_param_name] = (
+                    torch_params[torch_param_name].shape,
+                    torch_params[torch_param_name].dtype,
+                )
                 torch_param = fetch_torch_param(torch_params[torch_param_name])
                 del torch_params[torch_param_name]
 
