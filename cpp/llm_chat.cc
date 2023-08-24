@@ -14,6 +14,7 @@
 #include <tvm/runtime/ndarray.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/runtime/relax_vm/memory_manager.h>
+#include <tvm/ir/expr.h>
 
 #include <cctype>
 #include <chrono>
@@ -233,9 +234,19 @@ class LLMChat {
    * \param app_config_json The JSON string used to partially override the configuration loaded from
    * disk, default to empty string.
    */
-  void Reload(tvm::runtime::Module executable, String model_path, String app_config_json = "") {
+  void Reload(tvm::runtime::Module executable, tvm::runtime::Module lora_executable, String model_path, String app_config_json = "") {
     // Step 1. Set tokenizer.
     this->tokenizer_ = TokenizerFromPath(model_path);
+
+
+    auto fload_lora_exec = lora_executable->GetFunction("vm_load_executable");
+    ICHECK(fload_lora_exec.defined()) << "TVM runtime cannot find vm_load_executable";
+    lora_vm_ = fload_lora_exec();
+    lora_vm_->GetFunction("vm_initialization")(static_cast<int>(device_.device_type), device_.device_id,
+                                          static_cast<int>(relax_vm::AllocatorType::kPooled),
+                                          static_cast<int>(kDLCPU), 0,
+                                          static_cast<int>(relax_vm::AllocatorType::kPooled));
+    
 
     // Step 2. Initialize vm, we use the packed function mechanism
     // so there is no explicit abi dependency on these extra
@@ -702,6 +713,19 @@ class LLMChat {
     }
   }
 
+  void ApplyLora(std::string torch_name, int param_idx, Array<tvm::Integer> quantized_param_indices, NDArray lora_a, NDArray lora_b) {
+    Array<NDArray> quantized_params;
+    for (tvm::Integer i : quantized_param_indices) {
+      quantized_params.push_back(this->params_[i.IntValue()]);
+    }
+    Array<NDArray> new_params = lora_vm_->GetFunction(torch_name + "_" + std::to_string(param_idx))(
+      quantized_params, lora_a, lora_b
+    );
+    for (tvm::Integer i : quantized_param_indices) {
+      this->params_.Set(i.IntValue(), new_params[i.IntValue()]);
+    }
+  }
+
   std::string RawGenerate(std::string prompt, int64_t generate_len) {
     CHECK_GE(generate_len, 0) << "The input generate is expected to be non-negative.";
 
@@ -987,6 +1011,7 @@ class LLMChat {
   Device device_;
   // The vm module
   Module vm_;
+  Module lora_vm_;
   // encoding function
   PackedFunc prefill_func_;
   // embedding function
@@ -1045,12 +1070,12 @@ class LLMChatModule : public ModuleNode {
         ClearGlobalMemoryManager();
         chat_ = std::make_unique<LLMChat>(LLMChat(device_));
         ICHECK(2 <= args.size() && args.size() <= 3);
-        if (args.size() == 2) {
+        if (args.size() == 3) {
           // args: executable, model_path
-          chat_->Reload(args[0], args[1]);
-        } else if (args.size() == 3) {
-          // args: executable, model_path, app_config_json (used for overriding config)
           chat_->Reload(args[0], args[1], args[2]);
+        } else if (args.size() == 4) {
+          // args: executable, model_path, app_config_json (used for overriding config)
+          chat_->Reload(args[0], args[1], args[2], args[3]);
         }
       });
     } else if (name == "unload") {
@@ -1156,6 +1181,11 @@ class LLMChatModule : public ModuleNode {
     } else if (name == "process_system_prompts") {
       return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
         GetChat()->ProcessSystemPrompts();
+      });
+    } else if (name == "apply_lora") {
+      return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
+        ICHECK_EQ(args.size(), 5);
+        GetChat()->ApplyLora(args[0], args[1], args[2], args[3], args[4]);
       });
     } else {
       return PackedFunc(nullptr);

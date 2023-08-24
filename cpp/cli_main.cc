@@ -160,6 +160,8 @@ struct ModelPaths {
    */
   std::filesystem::path lib;
 
+  std::filesystem::path lora_lib;
+
   static ModelPaths Find(const std::filesystem::path& artifact_path, const std::string& device_name,
                          const std::string& local_id);
 };
@@ -212,8 +214,10 @@ class ChatModule {
     this->runtime_stats_text_ = this->chat_mod_->GetFunction("runtime_stats_text");
     this->reset_chat_ = this->chat_mod_->GetFunction("reset_chat");
     this->process_system_prompts_ = this->chat_mod_->GetFunction("process_system_prompts");
+    this->apply_lora_ = this->chat_mod_->GetFunction("apply_lora");
     this->lib_path_ = "";
     this->executable_ = tvm::runtime::Module(nullptr);
+    this->lora_executable_ = tvm::runtime::Module(nullptr);
     ICHECK(prefill_ != nullptr);
     ICHECK(decode_ != nullptr);
     ICHECK(stopped_ != nullptr);
@@ -235,8 +239,9 @@ class ChatModule {
     if (this->lib_path_ != new_lib_path) {
       this->lib_path_ = new_lib_path;
       this->executable_ = tvm::runtime::Module::LoadFromFile(this->lib_path_);
+      this->lora_executable_ = tvm::runtime::Module::LoadFromFile(model.lora_lib.string());
     }
-    reload_(this->executable_, tvm::runtime::String(new_model_path));
+    reload_(this->executable_, this->lora_executable_, tvm::runtime::String(new_model_path));
     std::cout << "Loading finished" << std::endl << std::flush;
   }
 
@@ -296,9 +301,11 @@ class ChatModule {
   tvm::runtime::PackedFunc runtime_stats_text_;
   tvm::runtime::PackedFunc reset_chat_;
   tvm::runtime::PackedFunc process_system_prompts_;
+  tvm::runtime::PackedFunc apply_lora_;
 
   std::string lib_path_;
   tvm::runtime::Module executable_;
+  tvm::runtime::Module lora_executable_;
 };
 
 std::optional<std::filesystem::path> TryInferMLCChatConfig(
@@ -373,8 +380,25 @@ ModelPaths ModelPaths::Find(const std::filesystem::path& artifact_path,
               << artifact_path << "/prebuilt/lib or other search paths" << std::endl;
     exit(1);
   }
+  std::filesystem::path lora_lib_path;
+  if (auto path = FindFile(
+          {
+              artifact_path / lib_local_id,              // Usually this is the candidate
+              artifact_path / "prebuilt" / "lib",        // prebuilt lib
+              artifact_path / "prebuilt" / lib_local_id  // For prebuilts
+          },
+          {
+              "lora_kernels",
+          },
+          GetLibSuffixes())) {
+    lora_lib_path = path.value();
+  } else {
+    std::cerr << "Cannot find quantization library \"" << lib_name << GetLibSuffixes().back() << "\" in "
+              << artifact_path << "/prebuilt/lib or other search paths" << std::endl;
+    exit(1);
+  }
   std::cout << "Use model library: " << lib_path << std::endl;
-  return ModelPaths{config_path, params_json, lib_path};
+  return ModelPaths{config_path, params_json, lib_path, lora_lib_path};
 }
 
 /*!
