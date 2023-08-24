@@ -98,6 +98,7 @@ class ConvConfig:
         if self.messages is not None and self.offset is None:
             self.offset = len(self.messages)
 
+
 @dataclass
 class ChatConfig:
     r"""A dataclass that represents user-defined partial configuration for the
@@ -177,10 +178,13 @@ class ChatConfig:
 
     @classmethod
     def _from_json(chat_config_cls, json_obj: dict):
-        return chat_config_cls(**{
-            k: v for k, v in json_obj.items()
-            if k in inspect.signature(chat_config_cls).parameters
-        })
+        return chat_config_cls(
+            **{
+                k: v
+                for k, v in json_obj.items()
+                if k in inspect.signature(chat_config_cls).parameters
+            }
+        )
 
 
 class PlaceInPrompt(Enum):
@@ -598,6 +602,7 @@ class ChatModule:
         self._evaluate_func = chat_mod["evaluate"]
         self._get_role0_func = chat_mod["get_role0"]
         self._get_role1_func = chat_mod["get_role1"]
+        self._apply_lora = chat_mod["apply_lora"]
 
         # 3. Look up model_path
         self.model_path, self.config_file_path = _get_model_path(model)
@@ -931,3 +936,33 @@ class ChatModule:
     def _process_system_prompts(self):
         r"""Pre-process by prefilling the system prompts, running prior to any user input."""
         self._process_system_prompts_func()
+
+    def apply_lora(self, path: str):
+        import torch
+        from collections import defaultdict
+
+        with open(os.path.join(self.model_path, "param_idx.json"), "r") as param_idx_file:
+            param_info = json.load(param_idx_file)
+
+        lora_params = torch.load(os.path.join(path, "adapter_model.bin"))
+        lora_ndarray = defaultdict(dict)
+        for k, v in lora_params.items():
+            k = k.lstrip("base_model.model.")
+            if k.count("lora_A"):
+                lora_ndarray[k.replace("lora_A.", "")]["lora_a"] = tvm.nd.array(v)
+            elif k.count("lora_B"):
+                lora_ndarray[k.replace("lora_B.", "")]["lora_b"] = tvm.nd.array(v)
+            else:
+                raise ValueError("Unexpected param in lora weight")
+        del lora_params
+
+        for idx, info in param_info.items():
+            for torch_name in info["torch_names"]:
+                if torch_name in lora_ndarray:
+                    self._apply_lora(
+                        torch_name,
+                        int(idx),
+                        info["qidx"],
+                        lora_ndarray[torch_name]["lora_a"],
+                        lora_ndarray[torch_name]["lora_b"],
+                    )

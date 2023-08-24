@@ -1069,7 +1069,7 @@ class LLMChatModule : public ModuleNode {
         chat_ = nullptr;
         ClearGlobalMemoryManager();
         chat_ = std::make_unique<LLMChat>(LLMChat(device_));
-        ICHECK(2 <= args.size() && args.size() <= 3);
+        ICHECK(3 <= args.size() && args.size() <= 4);
         if (args.size() == 3) {
           // args: executable, model_path
           chat_->Reload(args[0], args[1], args[2]);

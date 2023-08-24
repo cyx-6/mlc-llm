@@ -284,7 +284,7 @@ def dump_param_idx(param_mgr: param_manager.ParamManager, artifact_path: str):
             "qidx": [i for i in param_mgr.param2qrange[param]],
             "torch_names": [torch_name for torch_name in param_mgr.f_convert_pname_fwd(name)],
         }
-    with open(f"{artifact_path}/params/param_idx.json", "w") as output_file:
+    with open(f"{artifact_path}/param_idx.json", "w") as output_file:
         json.dump(output_info, output_file, indent=2)
 
 
