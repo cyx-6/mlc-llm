@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass
+import os
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
@@ -191,11 +192,20 @@ def apply_rotary_pos_emb(q, k, cos, sin, offset: int = 0):
     return q_embed, k_embed
 
 
+class FlashInfer(nn.Module):
+    def __init__(self, config: LlamaConfig):
+        self.dtype = config.dtype
+        self.flash_infer = FlashInferIRModuleGen
+
+    def forward(self, q, k, v):
+        return super().forward(input)
+
+
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(self, config: LlamaConfig):
-        dtype = config.dtype
+        self.dtype = config.dtype
         self.hidden_size = config.hidden_size
         self.num_key_value_heads = (
             config.num_key_value_heads is None
@@ -210,36 +220,37 @@ class LlamaAttention(nn.Module):
             self.query_key_value_proj = Linear(
                 self.hidden_size,
                 (self.num_query_heads + 2 * self.num_key_value_heads) * self.head_dim,
-                dtype=dtype,
+                dtype=self.dtype,
                 bias=False,
             )
         else:
             self.q_proj = Linear(
                 self.hidden_size,
                 self.num_query_heads * self.head_dim,
-                dtype=dtype,
+                dtype=self.dtype,
                 bias=False,
             )
             self.k_proj = Linear(
                 self.hidden_size,
                 self.num_key_value_heads * self.head_dim,
-                dtype=dtype,
+                dtype=self.dtype,
                 bias=False,
             )
             self.v_proj = Linear(
                 self.hidden_size,
                 self.num_key_value_heads * self.head_dim,
-                dtype=dtype,
+                dtype=self.dtype,
                 bias=False,
             )
 
-        self.o_proj = Linear(self.hidden_size, self.hidden_size, dtype=dtype, bias=False)
+        self.o_proj = Linear(self.hidden_size, self.hidden_size, dtype=self.dtype, bias=False)
 
     def forward(
         self,
         hidden_states: relax.Expr,
         cos_cached: relax.Expr,
         sin_cached: relax.Expr,
+        flashinfer_tmp: relax.Expr,
         all_seq_len_shape: relax.Expr,
         past_key_value: Tuple[relax.Expr],
         attention_mask: Optional[relax.Expr] = None,
@@ -353,6 +364,24 @@ class LlamaAttention(nn.Module):
             key_states = nn.emit(relax.op.repeat(key_states, n_rep, axis=2))
             value_states = nn.emit(relax.op.repeat(value_states, n_rep, axis=2))
 
+        if q_len == 1:
+            query_states = nn.emit(reshape(query_states, [self.num_query_heads, self.head_dim]))
+            key_states = nn.emit(
+                reshape(key_states, [kv_seq_len, self.num_query_heads, self.head_dim])
+            )
+            value_states = nn.emit(
+                reshape(value_states, [kv_seq_len, self.num_query_heads, self.head_dim])
+            )
+            attn = nn.emit(
+                relax.call_dps_packed(
+                    "FlashInferSingleDecodeWithKVCache",
+                    (query_states, key_states, value_states, flashinfer_tmp, 2, 1),
+                    out_sinfo=R.Tensor((self.num_query_heads, self.head_dim), self.dtype),
+                )
+            )
+            attn = nn.emit(reshape(attn, [bsz, q_len, self.hidden_size]))
+            return attn, ((None, None) if past_key_value is None else past_key_value)
+
         query_states = nn.emit(permute_dims(query_states, [0, 2, 1, 3]))
         key_states = nn.emit(permute_dims(key_states, [0, 2, 1, 3]))
         value_states = nn.emit(permute_dims(value_states, [0, 2, 1, 3]))
@@ -410,6 +439,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states: relax.Expr,
         cos_cached: relax.Expr,
         sin_cached: relax.Expr,
+        flashinfer_tmp: relax.Expr,
         all_seq_len_shape: relax.Expr,
         past_key_value: Tuple[relax.Expr],
         attention_mask: Optional[relax.Expr] = None,
@@ -423,6 +453,7 @@ class LlamaDecoderLayer(nn.Module):
             hidden_states=hidden_states,
             cos_cached=cos_cached,
             sin_cached=sin_cached,
+            flashinfer_tmp=flashinfer_tmp,
             past_key_value=past_key_value,
             attention_mask=attention_mask,
             all_seq_len_shape=all_seq_len_shape,
@@ -526,6 +557,7 @@ class LlamaModel(nn.Module):
         inputs: relax.Expr,
         cos_cached: relax.Expr,
         sin_cached: relax.Expr,
+        flashinfer_tmp: relax.Expr,
         all_seq_len_shape: relax.Expr,
         past_key_values: relax.Expr,
     ):
@@ -556,6 +588,7 @@ class LlamaModel(nn.Module):
                 hidden_states,
                 cos_cached=cos_cached,
                 sin_cached=sin_cached,
+                flashinfer_tmp=flashinfer_tmp,
                 attention_mask=attention_mask,
                 past_key_value=past_key_value,
                 all_seq_len_shape=all_seq_len_shape,
@@ -585,6 +618,9 @@ class LlamaForCausalLM(nn.Module):
         self.sin_cached = nn.Parameter(
             (max(config.max_sequence_length, 2048), head_dim), dtype=config.dtype, name="sin_cached"
         )
+        self.flashinfer_tmp = nn.Parameter(
+            (2 * 1024 * 1024,), dtype="float32", name="flashinfer_tmp"
+        )
         ############ End ############
 
     def forward(
@@ -597,6 +633,7 @@ class LlamaForCausalLM(nn.Module):
             inputs=inputs,
             cos_cached=self.cos_cached,
             sin_cached=self.sin_cached,
+            flashinfer_tmp=self.flashinfer_tmp,
             all_seq_len_shape=all_seq_len_shape,
             past_key_values=past_key_values,
         )
@@ -897,7 +934,15 @@ def get_model(args, hf_config):
     t = np.arange(max(config.max_sequence_length, 2048), dtype=inv_freq.dtype)
     freqs = np.einsum("i,j->ij", t, inv_freq)
     emb = np.concatenate((freqs, freqs), axis=-1)
-    param_list[-2] = tvm.nd.array(np.cos(emb).astype(config.dtype), device)
-    param_list[-1] = tvm.nd.array(np.sin(emb).astype(config.dtype), device)
+    param_list[-3] = tvm.nd.array(np.cos(emb).astype(config.dtype), device)
+    param_list[-2] = tvm.nd.array(np.sin(emb).astype(config.dtype), device)
+    param_list[-1] = tvm.nd.array(np.zeros((2 * 1024 * 1024,)).astype("float32"), device)
+
+    ext_mod = tvm.runtime.load_static_library(
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), "tvm_wrapper.cu.o"),
+        ["FlashInferSingleDecodeWithKVCache"],
+    )
+
+    mod = mod.with_attr("external_mods", [ext_mod])
 
     return mod, param_manager, param_list, config
