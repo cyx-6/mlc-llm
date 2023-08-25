@@ -327,16 +327,15 @@ def dump_lora_kernels(
                 dl.gpu.GeneralReduction(),
                 dl.gpu.Fallback(),
             )(mod)
-            mod = mlc_llm.transform.LiftTIRGlobalBufferAlloc()(mod)  # pylint: disable=not-callable
             mod = tvm.tir.transform.ForceNarrowIndexToInt32()(mod)
 
-    use_cuda_graph = args.use_cuda_graph and target_kind == "cuda"
+    # use_cuda_graph = args.use_cuda_graph and target_kind == "cuda"
     debug_dump_script(mod, "mod_lora_deploy.py", args)
 
-    with tvm.transform.PassContext(config={"relax.backend.use_cuda_graph": use_cuda_graph}):
-        # The num_input attribute is needed to capture transformed weights passed as input
-        # into a cuda graph.
-        ex = relax.build(mod, args.target, system_lib=args.system_lib)
+    # with tvm.transform.PassContext(config={"relax.backend.use_cuda_graph": use_cuda_graph}):
+    # The num_input attribute is needed to capture transformed weights passed as input
+    # into a cuda graph.
+    ex = relax.build(mod, args.target, system_lib=args.system_lib)
 
     output_filename = f"lora_kernels.{args.lib_format}"
 

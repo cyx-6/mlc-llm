@@ -721,8 +721,8 @@ class LLMChat {
     Array<NDArray> new_params = lora_vm_->GetFunction(torch_name + "_" + std::to_string(param_idx))(
       quantized_params, lora_a, lora_b
     );
-    for (tvm::Integer i : quantized_param_indices) {
-      this->params_.Set(i.IntValue(), new_params[i.IntValue()]);
+    for (int i = 0; i < new_params.size(); ++i) {
+      this->params_.Set(quantized_param_indices[i].IntValue(), new_params[i]);
     }
   }
 
@@ -1186,6 +1186,11 @@ class LLMChatModule : public ModuleNode {
       return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
         ICHECK_EQ(args.size(), 5);
         GetChat()->ApplyLora(args[0], args[1], args[2], args[3], args[4]);
+      });
+    } else if (name == "load_tokenizer") {
+      return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
+        ICHECK_EQ(args.size(), 1);
+        GetChat()->tokenizer_ = TokenizerFromPath(args[0]);
       });
     } else {
       return PackedFunc(nullptr);

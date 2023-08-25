@@ -215,6 +215,7 @@ class ChatModule {
     this->reset_chat_ = this->chat_mod_->GetFunction("reset_chat");
     this->process_system_prompts_ = this->chat_mod_->GetFunction("process_system_prompts");
     this->apply_lora_ = this->chat_mod_->GetFunction("apply_lora");
+    this->load_tokenizer_ = this->chat_mod_->GetFunction("load_tokenizer");
     this->lib_path_ = "";
     this->executable_ = tvm::runtime::Module(nullptr);
     this->lora_executable_ = tvm::runtime::Module(nullptr);
@@ -302,6 +303,7 @@ class ChatModule {
   tvm::runtime::PackedFunc reset_chat_;
   tvm::runtime::PackedFunc process_system_prompts_;
   tvm::runtime::PackedFunc apply_lora_;
+  tvm::runtime::PackedFunc load_tokenizer_;
 
   std::string lib_path_;
   tvm::runtime::Module executable_;
