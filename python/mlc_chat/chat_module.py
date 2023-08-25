@@ -977,4 +977,4 @@ class ChatModule:
                         lora_ndarray[torch_name]["lora_b"],
                         lora_ndarray[torch_name]["lora_a"],
                     )
-        self._load_tokenizer(path)
+        # self._load_tokenizer(path)
