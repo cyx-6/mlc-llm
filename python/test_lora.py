@@ -1,8 +1,7 @@
 from mlc_chat import ChatModule
 from mlc_chat.callback import StreamToStdout
 
-# cm = ChatModule(model="llama-2-7b-chat-hf-q4f16_1")
-cm = ChatModule(model="llama-2-7b-hf-q4f16_1")
+cm = ChatModule(model="llama-2-7b-chat-hf-q4f16_1")
 print("===== without lora =====")
 output = cm.generate(
     prompt="where is the united states",
