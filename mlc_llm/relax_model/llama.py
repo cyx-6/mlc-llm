@@ -192,15 +192,6 @@ def apply_rotary_pos_emb(q, k, cos, sin, offset: int = 0):
     return q_embed, k_embed
 
 
-class FlashInfer(nn.Module):
-    def __init__(self, config: LlamaConfig):
-        self.dtype = config.dtype
-        self.flash_infer = FlashInferIRModuleGen
-
-    def forward(self, q, k, v):
-        return super().forward(input)
-
-
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -310,9 +301,9 @@ class LlamaAttention(nn.Module):
         kv_seq_len = all_seq_len_shape.struct_info.values[0]
         offset = kv_seq_len - q_len
         assert query_states.struct_info.dtype == cos_cached.struct_info.dtype
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos_cached, sin_cached, offset=offset
-        )
+        # query_states, key_states = apply_rotary_pos_emb(
+        #     query_states, key_states, cos_cached, sin_cached, offset=offset
+        # )
         # [bsz, t, nh, hd]
 
         kv_states_shape = key_states.struct_info.shape
@@ -375,11 +366,12 @@ class LlamaAttention(nn.Module):
             attn = nn.emit(
                 relax.call_dps_packed(
                     "FlashInferSingleDecodeWithKVCache",
-                    (query_states, key_states, value_states, flashinfer_tmp, 2, 1),
+                    (query_states, key_states, value_states, flashinfer_tmp, 1, 1, 1e4),
                     out_sinfo=R.Tensor((self.num_query_heads, self.head_dim), self.dtype),
                 )
             )
             attn = nn.emit(reshape(attn, [bsz, q_len, self.hidden_size]))
+            attn = self.o_proj(attn)
             return attn, ((None, None) if past_key_value is None else past_key_value)
 
         query_states = nn.emit(permute_dims(query_states, [0, 2, 1, 3]))
