@@ -718,8 +718,8 @@ class LLMChat {
     for (tvm::Integer i : quantized_param_indices) {
       quantized_params.push_back(this->params_[i.IntValue()]);
     }
-    Array<NDArray> new_params = Downcast<Array<NDArray>>(lora_vm_->GetFunction(
-        torch_name + "_" + std::to_string(param_idx))(quantized_params, lora_a, lora_b));
+    Array<NDArray> new_params = lora_vm_->GetFunction(torch_name + "_" + std::to_string(param_idx))(
+        quantized_params, lora_a, lora_b);
     for (int i = 0; i < new_params.size(); ++i) {
       this->params_.Set(quantized_param_indices[i].IntValue(), new_params[i]);
     }

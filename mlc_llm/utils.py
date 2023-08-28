@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import tvm
 from tvm import relax
 
-from .quantization import quantization_schemes
+from .quantization import quantization_schemes, NoQuantizationSpec
 from .relax_model import param_manager
 from .transform import ReorderTransformFunc
 
@@ -247,10 +247,25 @@ def create_lora_kernels(
             param_mgr.quantized_param_info.fields[i] for i in param_mgr.param2qrange[param]
         ]
         f_dequantize = param.quant_spec.get_dequantize_func(param.param_info, quantized_param_info)
+        if isinstance(param.quant_spec, NoQuantizationSpec):
+
+            def f_quantize_fallback(_, x):
+                assert len(x) == 1
+                return relax.Tuple(x)
+
+            def f_dequantize_fallback(_, x):
+                assert len(x) == 1
+                return x[0]
+
+            f_quantize = f_quantize_fallback
+            f_dequantize = f_dequantize_fallback
+
         if param.param_info.ndim == 2 and f_quantize and f_dequantize:
             quantized_sinfo = relax.TupleStructInfo(quantized_param_info)
             quantized_var = relax.Var("quantized", quantized_sinfo)
             for torch_pname in param_mgr.f_convert_pname_fwd(name):
+                if torch_pname not in torch_params_sinfo:
+                    continue
                 shape, dtype = torch_params_sinfo[torch_pname]
                 r = tvm.tir.Var("r", "int64")
                 lora_a = relax.Var("lora_a", relax.TensorStructInfo((int(shape[0]), r), "float16"))
