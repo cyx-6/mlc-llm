@@ -187,7 +187,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, offset: int = 0):
         f_rotary_embedding, q, cos, sin, offset, primfunc_name_hint="rotary_embedding"
     )
     k_embed = nn.emit_te(
-        f_rotary_embedding, k, cos, sin, offset, primfunc_name_hint="rotary_embedding"
+        f_rotary_embedding, k, cos, sin, 0, primfunc_name_hint="rotary_embedding"
     )
     return q_embed, k_embed
 
@@ -301,9 +301,6 @@ class LlamaAttention(nn.Module):
         kv_seq_len = all_seq_len_shape.struct_info.values[0]
         offset = kv_seq_len - q_len
         assert query_states.struct_info.dtype == cos_cached.struct_info.dtype
-        # query_states, key_states = apply_rotary_pos_emb(
-        #     query_states, key_states, cos_cached, sin_cached, offset=offset
-        # )
         # [bsz, t, nh, hd]
 
         kv_states_shape = key_states.struct_info.shape
@@ -373,6 +370,10 @@ class LlamaAttention(nn.Module):
             attn = nn.emit(reshape(attn, [bsz, q_len, self.hidden_size]))
             attn = self.o_proj(attn)
             return attn, ((None, None) if past_key_value is None else past_key_value)
+        else:
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, cos_cached, sin_cached, offset=offset
+            )
 
         query_states = nn.emit(permute_dims(query_states, [0, 2, 1, 3]))
         key_states = nn.emit(permute_dims(key_states, [0, 2, 1, 3]))
