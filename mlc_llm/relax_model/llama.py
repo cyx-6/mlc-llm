@@ -363,7 +363,7 @@ class LlamaAttention(nn.Module):
             attn = nn.emit(
                 relax.call_dps_packed(
                     "FlashInferSingleDecodeWithKVCache",
-                    (query_states, key_states, value_states, flashinfer_tmp, 1, 1, 1e4),
+                    (query_states, key_states, value_states, flashinfer_tmp, 0, 1, 1, 1e4),
                     out_sinfo=R.Tensor((self.num_query_heads, self.head_dim), self.dtype),
                 )
             )
