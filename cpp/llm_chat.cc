@@ -249,6 +249,23 @@ struct FunctionTable {
     }
   }
 
+  std::unordered_map<std::string, int64_t> LoadLoRAIndices(const std::string& model_path) {
+    std::ifstream lora_indices_istream((model_path + "/lora-indices.json").c_str());
+    std::ostringstream lora_indices_ostream;
+    ICHECK(lora_indices_istream);
+    lora_indices_ostream << lora_indices_istream.rdbuf();
+    std::string lora_indices_str = lora_indices_ostream.str();
+    picojson::value lora_indices_value;
+    picojson::parse(lora_indices_value, lora_indices_str);
+    auto lora_indices_obj = lora_indices_value.get<picojson::object>();
+    std::unordered_map<std::string, int64_t> lora_indices;
+    for (auto const& [key, value] : lora_indices_obj) {
+      ICHECK(value.is<int64_t>());
+      lora_indices[key] = value.get<int64_t>();
+    }
+    return lora_indices;
+  }
+
   void _InitFunctions() {
     this->prefill_func_ = mod_get_func("prefill");
     this->embed_func_ = mod_get_func("embed");
@@ -508,13 +525,23 @@ class LLMChat {
     this->temperature_arr_ = NDArray::Empty({}, DataType::Float(32), device_);
     float temperature = static_cast<float>(this->temperature_);
     this->temperature_arr_.CopyFromBytes(&temperature, sizeof(float));
-    if (ft_.use_disco){
+    if (ft_.use_disco) {
       Device null_device{DLDeviceType(0), 0};
       this->input_tokens_decode_ =
-            Downcast<DRef>(ft_.Empty(ShapeTuple({1, 1}), DataType::Int(32), null_device));
+          Downcast<DRef>(ft_.Empty(ShapeTuple({1, 1}), DataType::Int(32), null_device));
     }
     // Step 7. Reset chat
+
+    this->lora_indices = ft_.LoadLoRAIndices(model_path);
     this->ResetChat();
+  }
+
+  void ApplyLora(Map<String, NDArray> lora_weight) {
+    for (auto const& [key, value] : lora_weight) {
+      ICHECK(this->lora_indices.count(std::string(key)));
+      Array<NDArray> params = Downcast<Array<NDArray>>(this->params_);
+      params.Set(lora_indices.at(std::string(key)), value);
+    }
   }
 
   void ResetChat() {
@@ -997,7 +1024,8 @@ class LLMChat {
       for (int i = 0; i < input_tokens.size(); ++i) {
         ObjectRef input_data;
         if (ft_.use_disco) {
-          ft_.sess->CopyToWorker0(this->GetInputTokenNDArray({input_tokens[i]}), input_tokens_decode_);
+          ft_.sess->CopyToWorker0(this->GetInputTokenNDArray({input_tokens[i]}),
+                                  input_tokens_decode_);
           input_data = input_tokens_decode_;
         } else {
           input_data = ft_.CopyToWorker0(this->GetInputTokenNDArray({input_tokens[i]}));
@@ -1174,6 +1202,8 @@ class LLMChat {
   NDArray logits_on_cpu_{nullptr};
   // pre-allocated ndarray for decode function's input tokens
   DRef input_tokens_decode_{nullptr};
+  // LoRA indices map
+  std::unordered_map<std::string, int64_t> lora_indices;
 };
 
 /*!
@@ -1307,6 +1337,12 @@ class LLMChatModule : public ModuleNode {
     } else if (name == "process_system_prompts") {
       return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
         GetChat()->ProcessSystemPrompts();
+      });
+    } else if (name == "apply_lora") {
+      return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
+        ICHECK_EQ(args.size(), 1);
+        Map<String, NDArray> lora_weight = args[0];
+        GetChat()->ApplyLora(lora_weight);
       });
     } else {
       return PackedFunc(nullptr);

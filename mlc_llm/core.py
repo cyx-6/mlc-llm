@@ -439,9 +439,15 @@ def mod_transform_before_build(
                 ]
             )(mod)
 
+    utils.debug_dump_script(mod, "t0.py", args, show_meta=False)
     mod = mlc_llm.transform.FuseTransposeMatmul()(mod)
+    utils.debug_dump_script(mod, "t1.py", args, show_meta=False)
+    mod = mlc_llm.transform.FuseDecodeAdd()(mod)
+    utils.debug_dump_script(mod, "t1.5.py", args, show_meta=False)
     mod = relax.pipeline.get_pipeline()(mod)  # pylint: disable=no-value-for-parameter
+    utils.debug_dump_script(mod, "t2.py", args, show_meta=False)
     mod = mlc_llm.transform.FuseDecodeMatmulEwise()(mod)
+    utils.debug_dump_script(mod, "t3.py", args, show_meta=False)
     mod = mlc_llm.transform.FuseDecodeTake()(mod)
     mod = relax.transform.DeadCodeElimination(model_names)(mod)
     mod = mlc_llm.transform.CleanUpTIRAttrs()(mod)
@@ -511,6 +517,7 @@ def build(mod_deploy: tvm.IRModule, args: argparse.Namespace) -> None:
             else tvm.target.Target("apple/m1-gpu-restricted")
         )
         with dispatch_target:
+            utils.debug_dump_script(mod_deploy, "before_dlight.py", args, show_meta=False)
             mod_deploy = dl.ApplyDefaultSchedule(  # pylint: disable=not-callable
                 dl.gpu.Matmul(),
                 dl.gpu.GEMV(),
@@ -518,6 +525,7 @@ def build(mod_deploy: tvm.IRModule, args: argparse.Namespace) -> None:
                 dl.gpu.GeneralReduction(),
                 dl.gpu.Fallback(),
             )(mod_deploy)
+            utils.debug_dump_script(mod_deploy, "after_dlight.py", args, show_meta=False)
             mod_deploy = (
                 mlc_llm.transform.LiftTIRGlobalBufferAlloc()(  # pylint: disable=not-callable
                     mod_deploy
@@ -607,6 +615,8 @@ def build_model_from_args(args: argparse.Namespace):
             mod, param_manager, params, model_config = chatglm.get_model(args, config)
         else:
             raise ValueError(f"Model {args.model} not supported")
+
+        params = utils.gen_lora_weight_placeholders(param_manager, params, model_config)
 
         for qspec_updater_class in param_manager.qspec_updater_classes:
             qspec_updater = qspec_updater_class(param_manager)

@@ -165,7 +165,8 @@ class FTQuantizeUpdater(QuantSpecUpdater._cls):
         if call.op != tvm.ir.Op.get("relax.matmul"):
             return
         rhs = self.lookup_binding(call.args[1])
-        assert rhs is not None
+        if rhs is None:
+            return
         if (
             rhs.op != tvm.ir.Op.get("relax.permute_dims")
             or rhs.attrs.axes is not None
@@ -178,7 +179,9 @@ class FTQuantizeUpdater(QuantSpecUpdater._cls):
 
         param = self.param_map[rhs.args[0]]
 
-        if call.struct_info.dtype == "float32" or rhs.struct_info.shape[-1] % 8 != 0:
+        if (
+            call.struct_info.dtype == "float32" or rhs.struct_info.shape[-1] % 8 != 0
+        ) and isinstance(param.quant_spec, FTRowwiseQuantizationSpec):
             # FT requires N to be a multiple of 8
             # FT does not support fp32 output dtype
             # TODO(masahi): If `matmul(..., out_dtype="float32")` is immediately followed

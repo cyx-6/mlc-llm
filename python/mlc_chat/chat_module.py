@@ -584,6 +584,7 @@ class ChatModule:
         self._evaluate_func = chat_mod["evaluate"]
         self._get_role0_func = chat_mod["get_role0"]
         self._get_role1_func = chat_mod["get_role1"]
+        self._apply_lora = chat_mod["apply_lora"]
 
         # 3. Look up model_path
         self.model_path, self.config_file_path = _get_model_path(model)
@@ -917,3 +918,26 @@ class ChatModule:
     def _process_system_prompts(self):
         r"""Pre-process by prefilling the system prompts, running prior to any user input."""
         self._process_system_prompts_func()
+
+    def apply_lora(self, path: str):
+        import torch
+        from collections import defaultdict
+
+        with open(
+            os.path.join(path, "adapter_config.json"), "r", encoding="utf-8"
+        ) as param_idx_file:
+            lora_config = json.load(param_idx_file)
+        scale = 1.0 * lora_config["lora_alpha"] / lora_config["r"]
+
+        lora_params = torch.load(os.path.join(path, "adapter_model.bin"))
+        lora_ndarray = defaultdict(dict)
+        for k, v in lora_params.items():
+            k = k.replace("base_model.model.", "")
+            if k.count("lora_A"):
+                lora_ndarray[k] = tvm.runtime.ndarray.from_dlpack(v.to(torch.float16))
+            elif k.count("lora_B"):
+                lora_ndarray[k] = tvm.runtime.ndarray.from_dlpack((v * scale).to(torch.float16))
+            else:
+                raise ValueError("Unexpected param in lora weight")
+        del lora_params
+        self._apply_lora(lora_ndarray)

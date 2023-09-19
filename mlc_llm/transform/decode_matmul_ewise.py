@@ -82,3 +82,36 @@ class FuseDecodeMatmulEwise:
         mod = relax.transform.FuseTIR()(mod)
 
         return mod
+
+
+def decode_add_pattern(n_aux_tensor: int):
+    assert n_aux_tensor == 1 or n_aux_tensor == 2 or n_aux_tensor == 3 or n_aux_tensor == 4
+
+    w_scaled = wildcard()
+    aux_tensors = [wildcard(), wildcard(), wildcard(), wildcard()]
+    lora = wildcard()
+    w = is_op("relax.call_tir")(
+        GlobalVarPattern(),
+        TuplePattern([w_scaled, *aux_tensors[0:n_aux_tensor]]),
+        add_constraint=False,
+    )
+    matmul = is_op("relax.add")(w, lora)
+
+    annotations = {
+        "matmul": matmul,
+        "w": w,
+        "lora": lora,
+        "w_scaled": w_scaled,
+    }
+    return matmul, annotations, check_decoding
+
+
+@tvm.transform.module_pass(opt_level=0, name="FuseDecodeAdd")
+class FuseDecodeAdd:
+    def transform_module(self, mod: IRModule, ctx: tvm.transform.PassContext) -> IRModule:
+        for n_aux_tensor in [1, 2, 3, 4]:
+            mod = relax.transform.FuseOpsByPattern(
+                [("decode_add", *decode_add_pattern(n_aux_tensor))]
+            )(mod)
+
+        return mod

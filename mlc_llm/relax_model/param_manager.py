@@ -260,6 +260,7 @@ class ParamManager:
             param = self._register_param(
                 name,
                 relax_param,
+                quant_kind,
                 getattr(quantization_scheme, quant_kind.name),
                 func_name,
                 getattr(relax_param, "shard_dim", None),
@@ -586,6 +587,7 @@ class ParamManager:
         self,
         name: str,
         var: relax.Var,
+        quant_kind: quantization.ParamQuantKind,
         quant_spec: quantization.QuantizationSpec,
         func_name: str,
         shard_dim: Optional[int],

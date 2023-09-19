@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from typing import Any, Dict, List, Optional, Set
+import numpy as np
 
 import tvm
 from tvm import relax
@@ -186,6 +187,31 @@ def debug_dump_shader(ex: tvm.relax.Executable, name: str, args: argparse.Namesp
     print(f"Dump shader to {dump_path}")
 
 
+def gen_lora_weight_placeholders(
+    param_mgr: param_manager.ParamManager,
+    model_params: List[Optional[tvm.nd.NDArray]],
+    model_config: Any,
+) -> List[Optional[tvm.nd.NDArray]]:
+    device = tvm.cpu()
+    dtype = model_config.dtype
+    for pidx, name in enumerate(param_mgr.param_names):
+        if name.endswith("lora_A.weight"):
+            model_params[pidx] = tvm.nd.array(
+                np.zeros((16, int(param_mgr.params[name].param_info.shape.values[1]))).astype(
+                    dtype
+                ),
+                device,
+            )
+        elif name.endswith("lora_B.weight"):
+            model_params[pidx] = tvm.nd.array(
+                np.zeros((int(param_mgr.params[name].param_info.shape.values[0]), 16)).astype(
+                    dtype
+                ),
+                device,
+            )
+    return model_params
+
+
 def convert_weights(
     param_mgr: param_manager.ParamManager,
     model_params: List[Optional[tvm.nd.NDArray]],
@@ -256,7 +282,24 @@ def convert_weights(
     print("Start computing and quantizing weights... This may take a while.")
     vm["transform_params"]()
     print("Finish computing and quantizing weights.")
+    dump_lora_indices(param_mgr, args.artifact_path)
     return loaded_params
+
+
+def dump_lora_indices(param_mgr: param_manager.ParamManager, artifact_path: str) -> None:
+    lora_indices = {}
+    for name in param_mgr.param_names:
+        param = param_mgr.params[name]
+        if name.endswith("lora_A.weight") or name.endswith("lora_B.weight"):
+            assert (
+                param_mgr.param2qrange[param].start + 1 == param_mgr.param2qrange[param].stop
+            ), "lora weight should have only one index in params"
+            lora_indices[name] = param_mgr.param2qrange[param].start
+    params_dir = os.path.join(artifact_path, "params")
+    if not os.path.exists(params_dir):
+        os.mkdir(params_dir)
+    with open(os.path.join(params_dir, "lora-indices.json"), "w", encoding="utf-8") as output_file:
+        json.dump(lora_indices, output_file, indent=2)
 
 
 def save_params(params: List[tvm.nd.NDArray], artifact_path: str) -> None:
@@ -458,6 +501,7 @@ def parse_target(args: argparse.Namespace) -> None:
         from tvm.contrib.cc import (  # pylint: disable=import-outside-toplevel
             cross_compiler,
         )
+
         args.export_kwargs = {
             "fcompile": cross_compiler(
                 args.cc_path,

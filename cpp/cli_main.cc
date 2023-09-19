@@ -214,6 +214,7 @@ class ChatModule {
     this->runtime_stats_text_ = this->chat_mod_->GetFunction("runtime_stats_text");
     this->reset_chat_ = this->chat_mod_->GetFunction("reset_chat");
     this->process_system_prompts_ = this->chat_mod_->GetFunction("process_system_prompts");
+    this->apply_lora_ = this->chat_mod_->GetFunction("apply_lora");
     this->lib_path_ = "";
     this->executable_ = tvm::runtime::Module(nullptr);
     ICHECK(prefill_ != nullptr);
@@ -225,6 +226,7 @@ class ChatModule {
     ICHECK(get_role1_ != nullptr);
     ICHECK(runtime_stats_text_ != nullptr);
     ICHECK(reset_chat_ != nullptr);
+    ICHECK(apply_lora_ != nullptr);
   }
   /*!
    * \brief Reload the module to a new model path.
@@ -297,6 +299,7 @@ class ChatModule {
   tvm::runtime::PackedFunc runtime_stats_text_;
   tvm::runtime::PackedFunc reset_chat_;
   tvm::runtime::PackedFunc process_system_prompts_;
+  tvm::runtime::PackedFunc apply_lora_;
 
   std::string lib_path_;
   tvm::runtime::Module executable_;
