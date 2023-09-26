@@ -73,13 +73,10 @@ class Linear(nn.Module):
         bias=True,
         *,
         support_lora: bool = False,
-        f_lora_init: Callable[["Linear"], None] = None,
-        f_lora_forward: Callable[["Linear", relax.Expr], relax.Expr] = None,
     ):
         self.in_features = in_features
         self.out_features = out_features
         self.weight = nn.Parameter((out_features, in_features), dtype=dtype, name="linear_weight")
-        self.f_lora_forward = f_lora_forward
         if bias:
             self.bias = nn.Parameter((out_features,), dtype=dtype, name="linear_bias")
         else:
@@ -87,20 +84,17 @@ class Linear(nn.Module):
         self.support_lora = support_lora
         if not support_lora:
             return
-        if f_lora_init is None:
-            r = tir.Var("r", "int64")
-            setattr(
-                self,
-                "lora_A.weight",
-                nn.Parameter((r, in_features), dtype=dtype, name="lora_weight"),
-            )
-            setattr(
-                self,
-                "lora_B.weight",
-                nn.Parameter((out_features, r), dtype=dtype, name="lora_weight"),
-            )
-        else:
-            f_lora_init(self)
+        r = tir.Var("r", "int64")
+        setattr(
+            self,
+            "lora_A.weight",
+            nn.Parameter((r, in_features), dtype=dtype, name="lora_weight"),
+        )
+        setattr(
+            self,
+            "lora_B.weight",
+            nn.Parameter((out_features, r), dtype=dtype, name="lora_weight"),
+        )
 
     @staticmethod
     def set_attr(this, prefix, shape, dtype):
@@ -123,24 +117,17 @@ class Linear(nn.Module):
     def forward(self, input: relax.Expr) -> relax.Var:
         if not self.support_lora:
             return nn.emit(relax.op.linear(input, self.weight, self.bias))
-        if self.f_lora_forward is None:
-            assert hasattr(self, "lora_A.weight"), "lora_A.weight attribuite is missing"
-            assert hasattr(self, "lora_B.weight"), "lora_B.weight attribuite is missing"
-            # lora_weight = nn.emit(
-            #     relax.op.matmul(getattr(self, "lora_B.weight"), getattr(self, "lora_A.weight"))
-            # )
-            # updated_weight = nn.emit(relax.op.add(self.weight, lora_weight))
-            # return nn.emit(relax.op.linear(input, updated_weight, self.bias))
-            w = nn.emit(relax.op.linear(input, self.weight, self.bias))
-            xa = nn.emit(
-                relax.op.matmul(input, relax.op.permute_dims(getattr(self, "lora_A.weight")))
-            )
-            xab = nn.emit(
-                relax.op.matmul(xa, relax.op.permute_dims(getattr(self, "lora_B.weight")))
-            )
-            return nn.emit(relax.op.add(w, xab))
-        else:
-            return self.f_lora_forward(self, input)
+        assert hasattr(self, "lora_A.weight"), "lora_A.weight attribuite is missing"
+        assert hasattr(self, "lora_B.weight"), "lora_B.weight attribuite is missing"
+        lora_weight = nn.emit(
+            relax.op.matmul(getattr(self, "lora_B.weight"), getattr(self, "lora_A.weight"))
+        )
+        updated_weight = nn.emit(relax.op.add(self.weight, lora_weight))
+        return nn.emit(relax.op.linear(input, updated_weight, self.bias))
+        # w = nn.emit(relax.op.linear(input, self.weight, self.bias))
+        # xa = nn.emit(relax.op.matmul(input, relax.op.permute_dims(getattr(self, "lora_A.weight"))))
+        # xab = nn.emit(relax.op.matmul(xa, relax.op.permute_dims(getattr(self, "lora_B.weight"))))
+        # return nn.emit(relax.op.add(w, xab))
 
 
 class Embedding(nn.Module):
@@ -215,37 +202,12 @@ class LlamaMLP(nn.Module):
         intermediate_size = config.intermediate_size // self.num_shards
         dtype = config.dtype
         if self.combine_matmul:
-
-            def lora_init(_: Linear):
-                Linear.set_attr(self, "gate_proj", (intermediate_size, hidden_size), dtype)
-                Linear.set_attr(self, "up_proj", (intermediate_size, hidden_size), dtype)
-
-            def lora_forward(linear: Linear, input: relax.Expr):
-                lora_weights = [
-                    nn.emit(
-                        relax.op.matmul(
-                            getattr(self, f"{name}.lora_B.weight"),
-                            getattr(self, f"{name}.lora_A.weight"),
-                        )
-                    )
-                    for name in ["gate_proj", "up_proj"]
-                ]
-                lora_weight = nn.emit(relax.op.concat(lora_weights, axis=0))
-                # updated_weight = nn.emit(relax.op.add(linear.weight, lora_weight))
-                # return nn.emit(relax.op.linear(input, updated_weight, linear.bias))
-
-                w = nn.emit(relax.op.linear(input, linear.weight, linear.bias))
-                l = nn.emit(relax.op.linear(input, lora_weight, linear.bias))
-                return nn.emit(relax.op.add(w, l))
-
             self.gate_up_proj = Linear(
                 hidden_size,
                 2 * intermediate_size,
                 dtype=dtype,
                 bias=False,
                 support_lora=True,
-                f_lora_init=lora_init,
-                f_lora_forward=lora_forward,
             )
             self.down_proj = Linear(
                 intermediate_size, hidden_size, dtype=dtype, bias=False, support_lora=True
@@ -336,50 +298,12 @@ class LlamaAttention(nn.Module):
 
         self.combine_matmul = config.combine_matmul
         if self.combine_matmul:
-
-            def lora_init(_: Linear):
-                Linear.set_attr(
-                    self, "q_proj", (self.num_query_heads * self.head_dim, self.hidden_size), dtype
-                )
-                Linear.set_attr(
-                    self,
-                    "k_proj",
-                    (self.num_key_value_heads * self.head_dim, self.hidden_size),
-                    dtype,
-                )
-                Linear.set_attr(
-                    self,
-                    "v_proj",
-                    (self.num_key_value_heads * self.head_dim, self.hidden_size),
-                    dtype,
-                )
-
-            def lora_forward(linear: Linear, input: relax.Expr):
-                lora_weights = [
-                    nn.emit(
-                        relax.op.matmul(
-                            getattr(self, f"{name}.lora_B.weight"),
-                            getattr(self, f"{name}.lora_A.weight"),
-                        )
-                    )
-                    for name in ["q_proj", "k_proj", "v_proj"]
-                ]
-                lora_weight = nn.emit(relax.op.concat(lora_weights, axis=0))
-                # updated_weight = nn.emit(relax.op.add(linear.weight, lora_weight))
-                # return nn.emit(relax.op.linear(input, updated_weight, linear.bias))
-
-                w = nn.emit(relax.op.linear(input, linear.weight, linear.bias))
-                l = nn.emit(relax.op.linear(input, lora_weight, linear.bias))
-                return nn.emit(relax.op.add(w, l))
-
             self.query_key_value_proj = Linear(
                 self.hidden_size,
                 (self.num_query_heads + 2 * self.num_key_value_heads) * self.head_dim,
                 dtype=dtype,
                 bias=False,
                 support_lora=True,
-                f_lora_init=lora_init,
-                f_lora_forward=lora_forward,
             )
             self.query_key_value_proj.weight.shard_dim = 0
         else:
@@ -1008,7 +932,7 @@ def get_model(args, hf_config):
         dtype=dtype,
         max_sequence_length=max_position_embeddings,
         position_embedding_base=position_embedding_base,
-        combine_matmul=False,
+        combine_matmul=True,
         num_shards=args.num_shards,
         build_model_only=args.build_model_only,
         convert_weight_only=args.convert_weight_only,
@@ -1118,12 +1042,67 @@ def get_model(args, hf_config):
             return gate_up
         raise ValueError("Unexpected param loading")
 
+    def f_decompose_combined_param(relax_pname: str):
+        qkv_str = "query_key_value_proj"
+        gate_up_str = "gate_up_proj"
+        if "lora_A" in relax_pname or "lora_B" in relax_pname:
+            return None
+        if qkv_str in relax_pname:
+            hidden_size = config.hidden_size
+            num_key_value_heads = (
+                config.num_key_value_heads is None
+                and config.num_attention_heads
+                or config.num_key_value_heads
+            ) // config.num_shards
+            num_query_heads = config.num_attention_heads // config.num_shards
+            head_dim = hidden_size // config.num_attention_heads
+            decomposed = []
+            decomposed.append(
+                {
+                    "name": relax_pname.replace(qkv_str, "q_proj"),
+                    "shape": (num_query_heads * head_dim, hidden_size),
+                }
+            )
+            decomposed.append(
+                {
+                    "name": relax_pname.replace(qkv_str, "k_proj"),
+                    "shape": (num_key_value_heads * head_dim, hidden_size),
+                }
+            )
+            decomposed.append(
+                {
+                    "name": relax_pname.replace(qkv_str, "v_proj"),
+                    "shape": (num_key_value_heads * head_dim, hidden_size),
+                }
+            )
+            return decomposed
+        elif gate_up_str in relax_pname:
+            hidden_size = config.hidden_size
+            intermediate_size = config.intermediate_size // config.num_shards
+            decomposed = []
+            decomposed.append(
+                {
+                    "name": relax_pname.replace(gate_up_str, "gate_proj"),
+                    "shape": (intermediate_size, hidden_size),
+                }
+            )
+            decomposed.append(
+                {
+                    "name": relax_pname.replace(gate_up_str, "up_proj"),
+                    "shape": (intermediate_size, hidden_size),
+                }
+            )
+            return decomposed
+        else:
+            return None
+
     param_manager.set_param_loading_func(
         args.model_path,
         args.use_safetensors,
         f_convert_pname_fwd,
         f_convert_param_bkwd,
         f_compute_relax_param,
+        f_decompose_combined_param,
     )
 
     device = tvm.cpu()

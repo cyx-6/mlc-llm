@@ -189,6 +189,7 @@ class ParamManager:
     f_convert_param_bkwd: Callable[[str, Any], Optional[List[Tuple[str, Any]]]]
     f_compute_relax_param: Callable[[str, List[Any]], Any]
     f_run_prequantize: Optional[Callable[[str], str]]
+    f_decompose_combined_param: Callable[[str], Any]
 
     model_path: str
     use_safetensors: bool
@@ -209,6 +210,7 @@ class ParamManager:
         self.f_convert_param_bkwd = None
         self.f_compute_relax_param = None
         self.f_run_prequantize = None
+        self.f_decompose_combined_param = None
 
         self.qspec_updater_classes = []
 
@@ -277,6 +279,7 @@ class ParamManager:
             [str, Any], Optional[List[Tuple[str, Any]]]
         ] = lambda pname, torch_param: [(pname, torch_param)],
         f_compute_relax_param: Callable[[str, List[Any]], Any] = f_default_compute_relax_param,
+        f_decompose_combined_param: Callable[[str], str] = lambda _: None,
         *,
         no_lazy_param_loading: bool = False,
     ) -> None:
@@ -314,6 +317,8 @@ class ParamManager:
             self.f_convert_param_bkwd = f_convert_param_bkwd
         if self.f_compute_relax_param is None:
             self.f_compute_relax_param = f_compute_relax_param
+        if self.f_decompose_combined_param is None:
+            self.f_decompose_combined_param = f_decompose_combined_param
 
         self.model_path = model_path
         self.use_safetensors = use_safetensors

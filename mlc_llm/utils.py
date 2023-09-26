@@ -196,17 +196,19 @@ def gen_lora_weight_placeholders(
     dtype = model_config.dtype
     for pidx, name in enumerate(param_mgr.param_names):
         if name.endswith("lora_A.weight"):
+            if "query_key_value_proj" in name:
+                r = 48
+            elif "gate_up_proj" in name:
+                r = 32
+            else:
+                r = 16
             model_params[pidx] = tvm.nd.array(
-                np.zeros((16, int(param_mgr.params[name].param_info.shape.values[1]))).astype(
-                    dtype
-                ),
+                np.zeros((r, int(param_mgr.params[name].param_info.shape.values[1]))).astype(dtype),
                 device,
             )
         elif name.endswith("lora_B.weight"):
             model_params[pidx] = tvm.nd.array(
-                np.zeros((int(param_mgr.params[name].param_info.shape.values[0]), 16)).astype(
-                    dtype
-                ),
+                np.zeros((int(param_mgr.params[name].param_info.shape.values[0]), r)).astype(dtype),
                 device,
             )
     return model_params
@@ -288,6 +290,7 @@ def convert_weights(
 
 def dump_lora_indices(param_mgr: param_manager.ParamManager, artifact_path: str) -> None:
     lora_indices = {}
+    decomposed_param = {}
     for name in param_mgr.param_names:
         param = param_mgr.params[name]
         if name.endswith("lora_A.weight") or name.endswith("lora_B.weight"):
@@ -295,11 +298,18 @@ def dump_lora_indices(param_mgr: param_manager.ParamManager, artifact_path: str)
                 param_mgr.param2qrange[param].start + 1 == param_mgr.param2qrange[param].stop
             ), "lora weight should have only one index in params"
             lora_indices[name] = param_mgr.param2qrange[param].start
+        decomposed = param_mgr.f_decompose_combined_param(name)
+        if decomposed:
+            decomposed_param[name] = decomposed
     params_dir = os.path.join(artifact_path, "params")
     if not os.path.exists(params_dir):
         os.mkdir(params_dir)
     with open(os.path.join(params_dir, "lora-indices.json"), "w", encoding="utf-8") as output_file:
         json.dump(lora_indices, output_file, indent=2)
+    with open(
+        os.path.join(params_dir, "decomposed-param.json"), "w", encoding="utf-8"
+    ) as output_file:
+        json.dump(decomposed_param, output_file, indent=2)
 
 
 def save_params(params: List[tvm.nd.NDArray], artifact_path: str) -> None:
