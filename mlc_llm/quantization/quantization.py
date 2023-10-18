@@ -109,7 +109,8 @@ class ParamQuantKind(enum.IntEnum):
     linear_weight = 0
     embedding_table = 1
     final_fc_weight = 2
-    others = 3
+    lora_weight = 3
+    others = 4
 
 
 class QuantizationScheme:
@@ -125,6 +126,7 @@ class QuantizationScheme:
     linear_weight: QuantizationSpec
     embedding_table: QuantizationSpec
     final_fc_weight: QuantizationSpec
+    lora_weight: QuantizationSpec
     others: QuantizationSpec
 
     qspec_updater_class: Optional[Type["QuantSpecUpdater"]]
@@ -144,6 +146,7 @@ class QuantizationScheme:
     ) -> None:
         self.name = name
         self.linear_weight = linear_weight
+        self.lora_weight = NoQuantizationSpec(self.model_dtype)
         self.others = others if others is not None else NoQuantizationSpec(self.model_dtype)
 
         if embedding_table is None:

@@ -926,6 +926,19 @@ class LLMChat {
     return output;
   }
 
+  NDArray GetParam(int i) {
+    Array<NDArray> params = Downcast<Array<NDArray>>(this->params_);
+    ICHECK(i >= 0 && i < params.size());
+    return params[i];
+  }
+
+  void SetParam(int i, NDArray param) {
+    Array<NDArray> params = Downcast<Array<NDArray>>(this->params_);
+    ICHECK(i >= 0 && i < params.size());
+    params.Set(i, param);
+    this->params_ = params;
+  }
+
  private:
   picojson::value SerializeConfigToJSONValue() const {
     picojson::object config;
@@ -1406,6 +1419,20 @@ class LLMChatModule : public ModuleNode {
     } else if (name == "process_system_prompts") {
       return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
         GetChat()->ProcessSystemPrompts();
+      });
+    } else if (name == "get_param") {
+      return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
+        ICHECK_EQ(args.size(), 1);
+        int i = args[0];
+        NDArray p = GetChat()->GetParam(i);
+        *rv = p;
+      });
+    } else if (name == "set_param") {
+      return PackedFunc([this, sptr_to_self](TVMArgs args, TVMRetValue* rv) {
+        ICHECK_EQ(args.size(), 2);
+        int i = args[0];
+        NDArray p = args[1];
+        GetChat()->SetParam(i, p);
       });
     } else {
       return PackedFunc(nullptr);

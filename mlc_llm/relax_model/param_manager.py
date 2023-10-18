@@ -197,6 +197,8 @@ class ParamManager:
     f_compute_relax_param: Callable[[str, List[Any]], Any]
     f_run_prequantize: Optional[Callable[[str], str]]
 
+    f_lora_info: Callable[[str, Parameter], Dict]
+
     model_path: str
     use_safetensors: bool
     safetensors_load_func: Callable[[Union[str, os.PathLike], str], Dict[str, torchTensor]]
@@ -216,6 +218,8 @@ class ParamManager:
         self.f_convert_param_bkwd = None
         self.f_compute_relax_param = None
         self.f_run_prequantize = None
+
+        self.f_lora_info = None
 
         self.qspec_updater_classes = []
 

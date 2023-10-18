@@ -644,6 +644,7 @@ def build_model_from_args(args: argparse.Namespace):
             param_manager.init_torch_pname_to_bin_name(args.use_safetensors)
 
             new_params = utils.convert_weights(param_manager, params, args)
+            utils.save_params_indices(param_manager, args)
             utils.save_params(new_params, args.artifact_path)
             if args.model_category != "minigpt":
                 utils.copy_tokenizer(args)

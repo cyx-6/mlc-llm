@@ -9,10 +9,10 @@ from tvm.relax.op import ccl
 from tvm.relax.testing import nn
 from tvm.script import relax as R
 
-from ..quantization import ParamQuantKind, QuantizationScheme
+from ..quantization import ParamQuantKind, QuantizationScheme, NoQuantizationSpec
 from .commons import create_metadata_func
 from .modules import ModuleList
-from .param_manager import ParamManager
+from .param_manager import ParamManager, Parameter
 
 
 @dataclass
@@ -71,6 +71,8 @@ class LlamaConfig:
 
 
 class Linear(nn.Module):
+    use_lora: bool
+
     def __init__(self, in_features, out_features, dtype: str, bias=True):
         self.in_features = in_features
         self.out_features = out_features
@@ -79,8 +81,29 @@ class Linear(nn.Module):
             self.bias = nn.Parameter((out_features,), dtype=dtype, name="linear_bias")
         else:
             self.bias = None
+        if Linear.use_lora and isinstance(in_features, int) and isinstance(out_features, int):
+            r = tir.Var("r", "int64")
+            setattr(
+                self,
+                "lora_A.weight",
+                nn.Parameter((r, in_features), dtype=dtype, name="lora_weight"),
+            )
+            setattr(
+                self,
+                "lora_B.weight",
+                nn.Parameter((out_features, r), dtype=dtype, name="lora_weight"),
+            )
 
     def forward(self, input: relax.Expr) -> relax.Var:
+        if Linear.use_lora and hasattr(self, "lora_A.weight") and hasattr(self, "lora_B.weight"):
+            w = nn.emit(relax.op.linear(input, self.weight, self.bias))
+            xa = nn.emit(
+                relax.op.matmul(input, relax.op.permute_dims(getattr(self, "lora_A.weight")))
+            )
+            xab = nn.emit(
+                relax.op.matmul(xa, relax.op.permute_dims(getattr(self, "lora_B.weight")))
+            )
+            return nn.emit(relax.op.add(w, xab))
         return nn.emit(relax.op.linear(input, self.weight, self.bias))
 
 
@@ -821,6 +844,8 @@ def get_param_quant_kind(name: str, param_info: relax.TensorStructInfo) -> Param
         return ParamQuantKind.embedding_table
     elif "lm_head.weight" in name:
         return ParamQuantKind.final_fc_weight
+    elif "lora_A" in name or "lora_B" in name:
+        return ParamQuantKind.lora_weight
     elif param_info.ndim == 2 and name.endswith(".weight"):
         return ParamQuantKind.linear_weight
     else:
@@ -1202,12 +1227,15 @@ def get_model(args, hf_config):
             build_model_only=args.build_model_only,
         )
     else:
-        raise Exception("The model config should contain information about maximum sequence length.")
+        raise Exception(
+            "The model config should contain information about maximum sequence length."
+        )
 
     # If there is a user-provided maximum sequence length, override hf config.
     if args.max_seq_len != -1:
         config.max_sequence_length = args.max_seq_len
 
+    Linear.use_lora = not isinstance(args.quantization.linear_weight, NoQuantizationSpec)
     param_manager = ParamManager()
     bb = relax.BlockBuilder()
 
@@ -1307,6 +1335,96 @@ def get_model(args, hf_config):
             return gate_up
         raise ValueError("Unexpected param loading")
 
+    def f_lora_info(name: str, param: Parameter):
+        if "lora_A" in name or "lora_B" in name:
+            return {"id": -1}
+
+        hidden_size = config.hidden_size
+        num_key_value_heads = config.get_num_key_value_heads() // config.num_shards
+        num_query_heads = config.num_attention_heads // config.num_shards
+        head_dim = config.hidden_size // config.num_attention_heads
+        intermediate_size = config.intermediate_size // config.num_shards
+
+        lora_a_name = name.replace(".weight", ".lora_A.weight")
+        lora_b_name = name.replace(".weight", ".lora_B.weight")
+
+        if "query_key_value_proj" in name:
+            return {
+                "id": -1,
+                "type": "combined",
+                "lora_A_name": lora_a_name,
+                "lora_A_list": [
+                    {
+                        "name": lora_a_name.replace("query_key_value_proj", "q_proj"),
+                        "default_shape": [1, hidden_size],
+                    },
+                    {
+                        "name": lora_a_name.replace("query_key_value_proj", "k_proj"),
+                        "default_shape": [1, hidden_size],
+                    },
+                    {
+                        "name": lora_a_name.replace("query_key_value_proj", "v_proj"),
+                        "default_shape": [1, hidden_size],
+                    },
+                ],
+                "lora_B_name": lora_b_name,
+                "lora_B_list": [
+                    {
+                        "name": lora_b_name.replace("query_key_value_proj", "q_proj"),
+                        "default_shape": [num_query_heads * head_dim, 1],
+                    },
+                    {
+                        "name": lora_b_name.replace("query_key_value_proj", "k_proj"),
+                        "default_shape": [num_key_value_heads * head_dim, 1],
+                    },
+                    {
+                        "name": lora_b_name.replace("query_key_value_proj", "v_proj"),
+                        "default_shape": [num_key_value_heads * head_dim, 1],
+                    },
+                ],
+            }
+        elif "gate_up_proj" in name:
+            return {
+                "id": -1,
+                "type": "combined",
+                "lora_A_name": lora_a_name,
+                "lora_A_list": [
+                    {
+                        "name": lora_a_name.replace("gate_up_proj", "gate_proj"),
+                        "default_shape": [1, hidden_size],
+                    },
+                    {
+                        "name": lora_a_name.replace("gate_up_proj", "up_proj"),
+                        "default_shape": [1, hidden_size],
+                    },
+                ],
+                "lora_B_name": lora_b_name,
+                "lora_B_list": [
+                    {
+                        "name": lora_b_name.replace("gate_up_proj", "gate_proj"),
+                        "default_shape": [intermediate_size, 1],
+                    },
+                    {
+                        "name": lora_b_name.replace("gate_up_proj", "up_proj"),
+                        "default_shape": [intermediate_size, 1],
+                    },
+                ],
+            }
+        else:
+            if not len(param.param_info.shape.values) == 2:
+                return None
+            m, n = param.param_info.shape.values
+            if not (isinstance(m, int) and isinstance(n, int)):
+                return None
+            return {
+                "id": -1,
+                "type": "single",
+                "lora_A_name": lora_a_name,
+                "lora_B_name": lora_b_name,
+            }
+
+    param_manager.f_lora_info = f_lora_info
+
     param_manager.set_param_loading_func(
         args.model_path,
         args.use_safetensors,
@@ -1329,5 +1447,16 @@ def get_model(args, hf_config):
     emb = np.concatenate((freqs, freqs), axis=-1)
     param_list[-2] = tvm.nd.array(np.cos(emb).astype(config.dtype), device)
     param_list[-1] = tvm.nd.array(np.sin(emb).astype(config.dtype), device)
+
+    for pidx, name in enumerate(param_manager.param_names):
+        param = param_manager.params[name]
+        if name.endswith("lora_A.weight"):
+            param_list[pidx] = tvm.nd.array(
+                np.zeros((1, int(param.param_info.shape.values[1]))).astype(config.dtype), device
+            )
+        elif name.endswith("lora_B.weight"):
+            param_list[pidx] = tvm.nd.array(
+                np.zeros((int(param.param_info.shape.values[0]), 1)).astype(config.dtype), device
+            )
 
     return mod, param_manager, param_list, config

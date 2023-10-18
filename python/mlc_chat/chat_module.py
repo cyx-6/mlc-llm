@@ -724,6 +724,8 @@ class ChatModule:
         self._evaluate_func = chat_mod["evaluate"]
         self._get_role0_func = chat_mod["get_role0"]
         self._get_role1_func = chat_mod["get_role1"]
+        self._get_param_func = chat_mod["get_param"]
+        self._set_param_func = chat_mod["set_param"]
 
         # 3. Look up model_path
         self.model_path, self.config_file_path = _get_model_path(model)
@@ -1103,3 +1105,130 @@ class ChatModule:
     def _process_system_prompts(self):
         r"""Pre-process by prefilling the system prompts, running prior to any user input."""
         self._process_system_prompts_func()
+
+    def apply_lora(self, path: str):
+        import torch
+        import numpy as np
+        from collections import defaultdict
+
+        def lora_single(config, lora_params, multiply):
+            lora_a_name = config["lora_A_name"]
+            if lora_a_name in lora_params:
+                lora_a = torch.from_numpy(lora_params[lora_a_name]).cuda()
+            else:
+                lora_a = None
+            lora_b_name = config["lora_B_name"]
+            if lora_b_name in lora_params:
+                lora_b = torch.from_numpy(lora_params[lora_b_name]).cuda()
+            else:
+                lora_b = None
+            if lora_a and lora_b:
+                if multiply:
+                    return lora_b @ lora_a
+                return (lora_a, lora_b)
+            return None, None
+
+        def lora_combined(config, lora_params, multiply):
+            if all(not d["name"] in lora_params for d in config["lora_A_list"]):
+                # no new param
+                return None if multiply else (None, None)
+
+            param_list = []
+            r_sum = 0
+            for d in config["lora_A_list"]:
+                if d["name"] in lora_params:
+                    p = lora_params[d["name"]]
+                else:
+                    p = np.zeros(d["default_shape"]).astype("float16")
+                param_list.append(p)
+                r_sum += p.shape[0]
+
+            lora_a = torch.from_numpy(np.concatenate(param_list, axis=0)).cuda()
+            param_list = []
+            r_acc = 0
+            for d in config["lora_B_list"]:
+                if d["name"] in lora_params:
+                    p = lora_params[d["name"]]
+                else:
+                    p = np.zeros(d["default_shape"]).astype("float16")
+                r_cur = p.shape[1]
+                p = np.pad(p, ((0, 0), (r_acc, r_sum - r_acc - r_cur)))
+                param_list.append(p)
+                r_acc += r_cur
+            lora_b = torch.from_numpy(np.concatenate(param_list, axis=0)).cuda()
+            if multiply:
+                return lora_b @ lora_a
+            return (lora_a, lora_b)
+
+        with open(
+            os.path.join(path, "adapter_config.json"), "r", encoding="utf-8"
+        ) as param_idx_file:
+            lora_config = json.load(param_idx_file)
+        scale = 1.0 * lora_config["lora_alpha"] / lora_config["r"]
+
+        raw_params = torch.load(os.path.join(path, "adapter_model.bin"))
+        lora_params = defaultdict(dict)
+        for k, v in raw_params.items():
+            k = k.replace("base_model.model.", "")
+            if k.count("lora_A"):
+                lora_params[k] = v.to(torch.float16).cpu().numpy()
+            elif k.count("lora_B"):
+                lora_params[k] = (v * scale).to(torch.float16).cpu().numpy()
+            else:
+                raise ValueError("Unexpected param in lora weight")
+        del raw_params
+
+        with open(os.path.join(self.model_path, "lora-indices.json"), "r") as f:
+            lora_indices = json.load(f)
+        for name in lora_indices:
+            if "lora_A" in name or "lora_B" in name:
+                continue
+            config = lora_indices[name]
+            if config["id"] == -1:
+                # with quantization
+                if config["type"] == "single":
+                    lora_a, lora_b = lora_single(config, lora_params, multiply=False)
+                    if lora_a is not None and lora_b is not None:
+                        self._set_param_func(
+                            lora_indices[config["lora_A_name"]]["id"],
+                            tvm.runtime.ndarray.from_dlpack(lora_a),
+                        )
+                        self._set_param_func(
+                            lora_indices[config["lora_B_name"]]["id"],
+                            tvm.runtime.ndarray.from_dlpack(lora_b),
+                        )
+                elif config["type"] == "combined":
+                    lora_a, lora_b = lora_combined(config, lora_params, multiply=False)
+                    if lora_a is not None and lora_b is not None:
+                        self._set_param_func(
+                            lora_indices[config["lora_A_name"]]["id"],
+                            tvm.runtime.ndarray.from_dlpack(lora_a),
+                        )
+                        self._set_param_func(
+                            lora_indices[config["lora_B_name"]]["id"],
+                            tvm.runtime.ndarray.from_dlpack(lora_b),
+                        )
+                else:
+                    raise NotImplementedError()
+            else:
+                # without quantization
+                if config["type"] == "single":
+                    lora_ab = lora_single(config, lora_params, multiply=True)
+                    if lora_ab is not None:
+                        base = self._get_param_func(config["id"])
+                        self._set_param_func(
+                            config["id"],
+                            tvm.runtime.ndarray.from_dlpack(
+                                lora_ab + torch.utils.dlpack.from_dlpack(base).cuda()
+                            ),
+                        )
+                elif config["type"] == "combined":
+                    lora_ab = lora_combined(config, lora_params, multiply=True)
+                    if lora_ab is not None:
+                        base = self._get_param_func(config["id"])
+                        self._set_param_func(
+                            config["id"],
+                            tvm.runtime.ndarray.from_dlpack(
+                                lora_ab + torch.utils.dlpack.from_dlpack(base).cuda()
+                            ),
+                        )

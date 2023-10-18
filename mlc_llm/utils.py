@@ -14,7 +14,18 @@ from .relax_model import param_manager
 
 
 supported_model_types = set(
-    ["llama", "gpt_neox", "gpt_bigcode", "minigpt", "moss", "rwkv", "gptj", "chatglm", "mistral", "stablelm_epoch"]
+    [
+        "llama",
+        "gpt_neox",
+        "gpt_bigcode",
+        "minigpt",
+        "moss",
+        "rwkv",
+        "gptj",
+        "chatglm",
+        "mistral",
+        "stablelm_epoch",
+    ]
 )
 
 
@@ -291,6 +302,29 @@ def save_params(params: List[tvm.nd.NDArray], artifact_path: str) -> None:
     tvmjs.dump_ndarray_cache(
         param_dict, f"{artifact_path}/params", meta_data=meta_data, encode_format="raw"
     )
+
+
+def save_params_indices(
+    param_mgr: param_manager.ParamManager,
+    args: argparse.Namespace,
+):
+    output = {}
+    for pidx, name in enumerate(param_mgr.param_names):
+        param = param_mgr.params[name]
+        info = param_mgr.f_lora_info(name, param)
+        if info:
+            output[name] = info
+        else:
+            continue
+        start = param_mgr.param2qrange[param].start
+        stop = param_mgr.param2qrange[param].stop
+        if start + 1 == stop:
+            output[name]["id"] = start
+    params_dir = os.path.join(args.artifact_path, "params")
+    if not os.path.exists(params_dir):
+        os.mkdir(params_dir)
+    with open(os.path.join(params_dir, "lora-indices.json"), "w", encoding="utf-8") as output_file:
+        json.dump(output, output_file, indent=2)
 
 
 def load_params(artifact_path: str, device) -> List[tvm.nd.NDArray]:
