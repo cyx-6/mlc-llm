@@ -726,6 +726,8 @@ class ChatModule:
         self._get_role1_func = chat_mod["get_role1"]
         self._get_param_func = chat_mod["get_param"]
         self._set_param_func = chat_mod["set_param"]
+        self.activated_lora = None
+        self.replaced_weight = {}
 
         # 3. Look up model_path
         self.model_path, self.config_file_path = _get_model_path(model)
@@ -1178,6 +1180,12 @@ class ChatModule:
                 raise ValueError("Unexpected param in lora weight")
         del raw_params
 
+        def set_lora_param(id, param, original=None):
+            assert id not in self.replaced_weight, f"param {id} has been set"
+            self.replaced_weight[id] = self._get_param_func(id) if original is None else original
+            self._set_param_func(id, param)
+
+        self.activated_lora = path
         with open(os.path.join(self.model_path, "lora-indices.json"), "r") as f:
             lora_indices = json.load(f)
         for name in lora_indices:
@@ -1189,22 +1197,22 @@ class ChatModule:
                 if config["type"] == "single":
                     lora_a, lora_b = lora_single(config, lora_params, multiply=False)
                     if lora_a is not None and lora_b is not None:
-                        self._set_param_func(
+                        set_lora_param(
                             lora_indices[config["lora_A_name"]]["id"],
                             tvm.runtime.ndarray.from_dlpack(lora_a),
                         )
-                        self._set_param_func(
+                        set_lora_param(
                             lora_indices[config["lora_B_name"]]["id"],
                             tvm.runtime.ndarray.from_dlpack(lora_b),
                         )
                 elif config["type"] == "combined":
                     lora_a, lora_b = lora_combined(config, lora_params, multiply=False)
                     if lora_a is not None and lora_b is not None:
-                        self._set_param_func(
+                        set_lora_param(
                             lora_indices[config["lora_A_name"]]["id"],
                             tvm.runtime.ndarray.from_dlpack(lora_a),
                         )
-                        self._set_param_func(
+                        set_lora_param(
                             lora_indices[config["lora_B_name"]]["id"],
                             tvm.runtime.ndarray.from_dlpack(lora_b),
                         )
@@ -1216,19 +1224,30 @@ class ChatModule:
                     lora_ab = lora_single(config, lora_params, multiply=True)
                     if lora_ab is not None:
                         base = self._get_param_func(config["id"])
-                        self._set_param_func(
+                        set_lora_param(
                             config["id"],
                             tvm.runtime.ndarray.from_dlpack(
                                 lora_ab + torch.utils.dlpack.from_dlpack(base).cuda()
                             ),
+                            original=base,
                         )
                 elif config["type"] == "combined":
                     lora_ab = lora_combined(config, lora_params, multiply=True)
                     if lora_ab is not None:
                         base = self._get_param_func(config["id"])
-                        self._set_param_func(
+                        set_lora_param(
                             config["id"],
                             tvm.runtime.ndarray.from_dlpack(
                                 lora_ab + torch.utils.dlpack.from_dlpack(base).cuda()
                             ),
+                            original=base,
                         )
+
+    def reset_lora(self):
+        if self.activated_lora is None:
+            assert not bool(self.replaced_weight)
+            return
+        self.activated_lora = None
+        for id, param in self.replaced_weight.items():
+            self._set_param_func(id, param)
+        self.replaced_weight.clear()

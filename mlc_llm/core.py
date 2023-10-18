@@ -614,7 +614,6 @@ def build_model_from_args(args: argparse.Namespace):
             config = json.load(i_f)
 
     if not use_cache or args.convert_weight_only:
-
         model_generators = {
             "llama": llama,
             "mistral": llama,
