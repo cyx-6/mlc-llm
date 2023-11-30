@@ -33,6 +33,8 @@ class ConversationTemplate:
 
 class HfTokenizerModule:
     def __init__(self, model_artifact_path: Path):
+        if isinstance(model_artifact_path, str):
+            model_artifact_path = Path(model_artifact_path)
         hf_tokenizer = AutoTokenizer.from_pretrained(
             model_artifact_path.joinpath("model"),
             trust_remote_code=False,

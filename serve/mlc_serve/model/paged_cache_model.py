@@ -296,14 +296,14 @@ def sample(
             do_top_k |= top_ks[-1] != vocab_size
 
             if not param.presence_penalty == 0.0 or not param.frequency_penalty == 0:
-                for id, f in freq.items():
-                    logits[id][i] -= f * param.frequency_penalty + param.presence_penalty
+                for k, f in freq.items():
+                    logits[i][k] -= f * param.frequency_penalty + param.presence_penalty
             if not param.repetition_penalty == 1.0:
-                for id, f in freq.items():
-                    if logits[id][i] <= 0:
-                        logits[id][i] *= param.repetition_penalty
+                for k, _ in freq.items():
+                    if logits[i][k] <= 0:
+                        logits[i][k] *= param.repetition_penalty
                     else:
-                        logits[id][i] /= param.repetition_penalty
+                        logits[i][k] /= param.repetition_penalty
     logits_random = logits[mask_random]
 
     if divide_by_temperature:
@@ -533,7 +533,7 @@ class Model:
         sampling_params = []
         sequence_ids = []
         if is_prefill:
-            self.appeared_token_freqs = [defaultdict(lambda: 0) for _ in len(requests)]
+            self.appeared_token_freqs = [defaultdict(lambda: 0) for _ in range(len(requests))]
 
         for request in requests:
             if isinstance(request, PrefillRequest):
@@ -628,7 +628,7 @@ class Model:
         torch.cuda.nvtx.range_pop()
 
         try:
-            next_tokens = sample(logits, sampling_params, self.vocab_size, self.appeared_token_freqs)
+            next_tokens = sample(logits, sampling_params, self.vocab_size, appeared_token_freqs=self.appeared_token_freqs)
             for next_token,  appeared_token_freq in zip(next_tokens, self.appeared_token_freqs):
                 appeared_token_freq[next_token] += 1
 
