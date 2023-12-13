@@ -109,7 +109,8 @@ class ParamQuantKind(enum.IntEnum):
     linear_weight = 0
     embedding_table = 1
     final_fc_weight = 2
-    others = 3
+    expert_weight = 3
+    others = 4
 
 
 class QuantizationScheme:
@@ -125,6 +126,7 @@ class QuantizationScheme:
     linear_weight: QuantizationSpec
     embedding_table: QuantizationSpec
     final_fc_weight: QuantizationSpec
+    expert_weight: QuantizationSpec
     others: QuantizationSpec
 
     qspec_updater_class: Optional[Type["QuantSpecUpdater"]]
@@ -139,6 +141,7 @@ class QuantizationScheme:
         *,
         embedding_table: Optional[Union[QuantizationSpec, Literal["same_as_linear_weight"]]] = None,
         final_fc_weight: Optional[Union[QuantizationSpec, Literal["same_as_linear_weight"]]] = None,
+        expert_weight: Optional[Union[QuantizationSpec, Literal["same_as_linear_weight"]]] = None,
         others: Optional[QuantizationSpec] = None,
         qspec_updater_class: Optional[Type["QuantSpecUpdater"]] = None,
     ) -> None:
@@ -160,12 +163,19 @@ class QuantizationScheme:
         else:
             self.final_fc_weight = final_fc_weight
 
+        if expert_weight is None:
+            self.expert_weight = self.others
+        elif expert_weight == "same_as_linear_weight":
+            self.expert_weight = self.linear_weight
+        else:
+            self.expert_weight = expert_weight
+
         self.qspec_updater_class = qspec_updater_class
         self.f_convert_param_bkwd = None
         self.f_compute_relax_param = None
         self.f_run_prequantize = None
 
-        for spec in [self.linear_weight, self.embedding_table, self.final_fc_weight, self.others]:
+        for spec in [self.linear_weight, self.embedding_table, self.final_fc_weight, self.expert_weight, self.others]:
             if hasattr(spec, "convert_param_bkwd"):
                 self.f_convert_param_bkwd = spec.convert_param_bkwd
             if hasattr(spec, "compute_relax_param"):

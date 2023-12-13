@@ -128,6 +128,7 @@ quantization_schemes = {
             transpose=False,
         ),
         final_fc_weight="same_as_linear_weight",
+        expert_weight="same_as_linear_weight",
         qspec_updater_class=FTQuantizeUpdater,
     ),
     "q4f16_ft_group": QuantizationScheme(

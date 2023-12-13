@@ -592,67 +592,67 @@ class MoELinear(nn.Module):
         self.out_features = out_features
         self.quantization_scheme = config.quantization_scheme
 
-        if config.quantization_scheme.name == "q0f16":
-            # weight is row major
-            self.weight = nn.Parameter(
-                (num_experts, in_features, out_features),
-                dtype="float16",
-            )
-        elif config.quantization_scheme.name == "q4f16_ft":
-            assert out_features % 8 == 0
-            self.weight = nn.Parameter(
-                (num_experts, in_features, out_features // 2),
-                dtype="int8",
-            )
-            self.scales = nn.Parameter(
-                (num_experts, out_features),
-                dtype="float16",
-            )
-        else:
-            assert False, "unsupported quantization scheme"
+        # if config.quantization_scheme.name == "q0f16":
+        #     # weight is row major
+        self.weight = nn.Parameter(
+            (num_experts, in_features, out_features),
+            dtype="float16",
+        )
+        # elif config.quantization_scheme.name == "q4f16_ft":
+        #     assert out_features % 8 == 0
+        #     self.weight = nn.Parameter(
+        #         (num_experts, in_features, out_features // 2),
+        #         dtype="int8",
+        #     )
+        #     self.scales = nn.Parameter(
+        #         (num_experts, out_features),
+        #         dtype="float16",
+        #     )
+        # else:
+        #     assert False, "unsupported quantization scheme"
 
     def forward(self, x, rows_before):
         assert len(x.struct_info.shape) == 2
         total_rows = x.struct_info.shape[0]
-        if self.quantization_scheme.name == "q0f16":
-            return nn.emit(
-                relax.call_dps_packed(
-                    "cutlass.moe_gemm_f16f16",
-                    [
-                        x,
-                        self.weight,
-                        rows_before,
-                        total_rows,
-                        self.out_features,  # gemm_n
-                        self.in_features,  # gemm_k
-                        self.num_experts,
-                    ],
-                    out_sinfo=relax.TensorStructInfo(
-                        (total_rows, self.out_features),
-                        x.struct_info.dtype,
-                    ),
-                )
+        # if self.quantization_scheme.name == "q0f16":
+        return nn.emit(
+            relax.call_dps_packed(
+                "cutlass.moe_gemm_f16f16",
+                [
+                    x,
+                    self.weight,
+                    rows_before,
+                    total_rows,
+                    self.out_features,  # gemm_n
+                    self.in_features,  # gemm_k
+                    self.num_experts,
+                ],
+                out_sinfo=relax.TensorStructInfo(
+                    (total_rows, self.out_features),
+                    x.struct_info.dtype,
+                ),
             )
-        else:
-            return nn.emit(
-                relax.call_dps_packed(
-                    "cutlass.moe_gemm_s4f16",
-                    [
-                        x,
-                        self.weight,
-                        self.scales,
-                        rows_before,
-                        total_rows,
-                        self.out_features,  # gemm_n
-                        self.in_features,  # gemm_k
-                        self.num_experts,
-                    ],
-                    out_sinfo=relax.TensorStructInfo(
-                        (total_rows, self.out_features),
-                        x.struct_info.dtype,
-                    ),
-                )
-            )
+        )
+        # else:
+        #     return nn.emit(
+        #         relax.call_dps_packed(
+        #             "cutlass.moe_gemm_s4f16",
+        #             [
+        #                 x,
+        #                 self.weight,
+        #                 self.scales,
+        #                 rows_before,
+        #                 total_rows,
+        #                 self.out_features,  # gemm_n
+        #                 self.in_features,  # gemm_k
+        #                 self.num_experts,
+        #             ],
+        #             out_sinfo=relax.TensorStructInfo(
+        #                 (total_rows, self.out_features),
+        #                 x.struct_info.dtype,
+        #             ),
+        #         )
+        #     )
 
 
 class MoEMLP(nn.Module):
@@ -1127,6 +1127,8 @@ def get_param_quant_kind(name: str, param_info: relax.TensorStructInfo) -> Param
         return ParamQuantKind.final_fc_weight
     elif param_info.ndim == 2 and name.endswith(".weight"):
         return ParamQuantKind.linear_weight
+    elif param_info.ndim == 3:
+        return ParamQuantKind.expert_weight
     else:
         return ParamQuantKind.others
 
@@ -1499,10 +1501,10 @@ def setup_params(mod, param_manager, dtype, config, args):
             for k, v in mappings:
                 pname = pname.replace(k, v)
             # pname = pname.replace("model.", "")
-            if config.quantization_scheme.name == "q4f16_ft":
-                if pname.endswith("scales"):
-                    # TODO: remove after quantization integarted
-                    pname = pname.replace("scales", "weight")
+            # if config.quantization_scheme.name == "q4f16_ft":
+            #     if pname.endswith("scales"):
+            #         # TODO: remove after quantization integarted
+            #         pname = pname.replace("scales", "weight")
 
             if config.combine_matmul:
                 if qkv_str in pname:
@@ -1571,16 +1573,6 @@ def setup_params(mod, param_manager, dtype, config, args):
             return None
         return [(torch_pname, torch_param.astype(dtype))]
 
-    def quantize(experts, relax_pname):
-        print("quantizing experts", relax_pname)
-        func = tvm.get_global_func("cutlass.symmetric_quantize")
-        nd_experts = tvm.nd.array(experts)
-        qweight, qscale = func(nd_experts, True)
-        if relax_pname.endswith("weight"):
-            return qweight
-        else:
-            assert relax_pname.endswith("scales")
-            return qscale
 
     def f_compute_relax_param(relax_pname: str, torch_params: List[Any]):
         # Expected to enter this function only for the combined linear matmul weights.
@@ -1616,8 +1608,8 @@ def setup_params(mod, param_manager, dtype, config, args):
                         experts.append(gate_up.transpose())
                     result = np.stack(experts)
                 # print(config.quantization_scheme.name)
-                if config.quantization_scheme.name == "q4f16_ft" and "experts" in relax_pname:
-                    result = quantize(result, relax_pname)
+                # if config.quantization_scheme.name == "q4f16_ft" and "experts" in relax_pname:
+                #     result = quantize(result, relax_pname)
                 return result
             if "experts" in relax_pname:
                 use_pytorch = True
@@ -1632,8 +1624,8 @@ def setup_params(mod, param_manager, dtype, config, args):
                 # torch_params = [torch.from_numpy(param).cuda() for param in torch_params]
                 # experts = [expert.type(dtype).transpose(1, 0) for expert in torch_params]
                 # result = torch.stack(experts).detach().numpy()
-                if config.quantization_scheme.name == "q4f16_ft" and "experts" in relax_pname:
-                    result = quantize(result, relax_pname)
+                # if config.quantization_scheme.name == "q4f16_ft" and "experts" in relax_pname:
+                #     result = quantize(result, relax_pname)
                 return result
 
         if not config.combine_matmul:

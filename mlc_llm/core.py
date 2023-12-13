@@ -877,9 +877,9 @@ def build_model_from_args(args: argparse.Namespace):
             mod_transform = seq(mod_transform)
 
             params = utils.convert_weights(mod_transform, param_manager, params, args)
-            utils.save_params(
-                params, args.artifact_path, args.num_shards if args.use_presharded_weights else 1
-            )
+            # utils.save_params(
+            #     params, args.artifact_path, args.num_shards if args.use_presharded_weights else 1
+            # )
 
             if args.model_category != "minigpt":
                 utils.copy_tokenizer(args)
