@@ -7,6 +7,8 @@
 
 #include <tvm/runtime/container/string.h>
 
+#include "config.h"
+#include "prefix_cache.h"
 #include "request.h"
 #include "request_state.h"
 
@@ -94,6 +96,8 @@ class EngineStateObj : public Object {
   /*! \brief Runtime statistics. */
   EngineStats stats;
 
+  PrefixCache prefix_cache;
+
   /*! \brief Reset the engine state and clear the statistics. */
   void Reset();
   /*! \brief Get the request state of the given request. */
@@ -111,7 +115,7 @@ class EngineStateObj : public Object {
  */
 class EngineState : public ObjectRef {
  public:
-  explicit EngineState();
+  explicit EngineState(EngineConfig engine_config);
 
   TVM_DEFINE_MUTABLE_NOTNULLABLE_OBJECT_REF_METHODS(EngineState, ObjectRef, EngineStateObj);
 };

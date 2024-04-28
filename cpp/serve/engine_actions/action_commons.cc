@@ -29,8 +29,13 @@ void ProcessFinishedRequestStateEntries(std::vector<RequestStateEntry> finished_
     // Mark the status of this entry as finished.
     rsentry->status = RequestStateStatus::kFinished;
     // Remove the request state entry from all the models.
-    RemoveRequestFromModel(estate, rsentry->mstates[0]->internal_id, models);
-    estate->id_manager.RecycleId(rsentry->mstates[0]->internal_id);
+    estate->prefix_cache->RecycleSequence(
+        rsentry->mstates[0]->internal_id, TypedPackedFunc<void()>([models, rsentry, estate]() {
+          for (Model model : models) {
+            model->RemoveSequence(rsentry->mstates[0]->internal_id);
+          }
+          estate->id_manager.RecycleId(rsentry->mstates[0]->internal_id);
+        }));
 
     RequestState rstate = estate->GetRequestState(rsentry->request);
     int parent_idx = rsentry->parent_idx;
@@ -136,6 +141,14 @@ void ActionStepPostProcess(Array<Request> requests, EngineState estate, Array<Mo
     NVTXScopedRange nvtx_scope("Call request stream callback");
     // - Invoke the stream callback function once for all collected requests.
     request_stream_callback(callback_delta_outputs);
+  }
+
+  for (const RequestStateEntry& rsentry : finished_rsentries) {
+    IntTuple ints = estate->prefix_cache->radix_tree->GetSequence(rsentry->mstates[0]->internal_id);
+    std::vector<int32_t> tokens;
+    tokens.reserve(ints->size);
+    for (int i = 0; i < ints->size; ++i) tokens.push_back(ints[i]);
+    LOG_INFO << rsentry->mstates[0]->internal_id << " => " << tokenizer->Decode(tokens);
   }
 
   ProcessFinishedRequestStateEntries(std::move(finished_rsentries), std::move(estate),

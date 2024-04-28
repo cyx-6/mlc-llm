@@ -27,6 +27,14 @@ class PagedRadixTreeObj : public Object {
    * \return The sequence tokens.
    * \throw Error if sequence ID is not valid.
    */
+  virtual bool HasSequence(int64_t seq_id) = 0;
+
+  /*!
+   * \brief Get a sequence's all tokens.
+   * \param seq_id The sequence ID for index.
+   * \return The sequence tokens.
+   * \throw Error if sequence ID is not valid.
+   */
   virtual IntTuple GetSequence(int64_t seq_id) = 0;
 
   /*!
@@ -83,6 +91,8 @@ class PagedRadixTreeObj : public Object {
    * \return The the remaining token capacity of the paged radix tree.
    */
   virtual size_t FreeCapacity() = 0;
+
+  virtual void Reset() = 0;
 
   static constexpr const uint32_t _type_index = TypeIndex::kDynamic;
   static constexpr const char* _type_key = "mlc.serve.PagedRadixTree";

@@ -45,7 +45,8 @@ class EngineImpl : public Engine {
   /********************** Engine Management **********************/
 
   explicit EngineImpl(EngineConfig engine_config, Optional<PackedFunc> request_stream_callback,
-                      Optional<EventTraceRecorder> trace_recorder) {
+                      Optional<EventTraceRecorder> trace_recorder)
+      : estate_(EngineState(engine_config)) {
     // Step 1. Initialize metadata and singleton states inside the engine
     this->estate_->Reset();
     // Being "-1" means there is no limit on single sequence length.

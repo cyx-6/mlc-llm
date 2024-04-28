@@ -77,6 +77,36 @@ class NewRequestPrefillActionObj : public EngineActionObj {
       rstates_of_entries.push_back(std::move(request_rstate));
     }
 
+    std::vector<std::pair<int64_t, int32_t>> forking_states;
+
+    for (int i = 0; i < num_rsentries; ++i) {
+      RequestStateEntry rsentry = prefill_inputs[i].rsentry;
+      RequestModelState mstate = rsentry->mstates[0];
+      if (rsentry->parent_idx == -1 && mstate->inputs.size() == 1) {
+        if (const TokenDataNode* token_data = mstate->inputs[0].as<TokenDataNode>()) {
+          auto [parent_seq, fork_pos] =
+              estate->prefix_cache->InsertSequence(mstate->internal_id, token_data->token_ids);
+          LOG_INFO << "added " << mstate->internal_id << " " << parent_seq << " " << fork_pos;
+
+          if (fork_pos) {
+            TokenData data = Downcast<TokenData>(mstate->inputs[0]);
+            std::vector<int32_t> token_ids;
+            for (int t = fork_pos; t < data->token_ids.size(); ++t) {
+              token_ids.push_back(data->token_ids[t]);
+            }
+            mstate->inputs.pop_back();
+            if (!token_ids.empty()) {
+              mstate->inputs.push_back(TokenData(token_ids));
+            }
+            forking_states.push_back({parent_seq, fork_pos});
+            prefill_inputs[i].max_prefill_length -= fork_pos;
+            continue;
+          }
+        }
+      }
+      forking_states.push_back({0, 0});
+    }
+
     // - Get embedding and run prefill for each model.
     std::vector<int> prefill_lengths;
     prefill_lengths.resize(/*size=*/num_rsentries, /*value=*/-1);
@@ -98,13 +128,23 @@ class NewRequestPrefillActionObj : public EngineActionObj {
         } else {
           ICHECK_EQ(prefill_lengths[i], input_length);
         }
+        if (model_id == 0 && estate->prefix_cache->HasSequence(mstate->internal_id)) {
+          const TokenDataNode* token_data = input_data[0].as<TokenDataNode>();
+          LOG_INFO << "extend " << mstate->internal_id << " " << token_data->token_ids.size();
+          estate->prefix_cache->ExtendSequence(mstate->internal_id, token_data->token_ids);
+        }
 
         ICHECK(mstate->draft_output_tokens.empty());
         ICHECK(mstate->draft_output_prob_dist.empty());
         if (status_before_prefill[i] == RequestStateStatus::kPending) {
           // Add the sequence to the model, or fork the sequence from its parent.
           if (rsentry->parent_idx == -1) {
-            models_[model_id]->AddNewSequence(mstate->internal_id);
+            if (forking_states[i].first > 0) {
+              models_[model_id]->ForkSequence(forking_states[i].first, mstate->internal_id,
+                                              forking_states[i].second);
+            } else {
+              models_[model_id]->AddNewSequence(mstate->internal_id);
+            }
           } else {
             models_[model_id]->ForkSequence(
                 rstates_of_entries[i]->entries[rsentry->parent_idx]->mstates[model_id]->internal_id,
@@ -232,6 +272,15 @@ class NewRequestPrefillActionObj : public EngineActionObj {
     std::vector<SampleResult> sample_results = sampler_->BatchSampleTokensWithProbBeforeTopP(
         probs_on_device, sample_indices, request_ids, generation_cfg, rngs);
     ICHECK_EQ(sample_results.size(), rsentries_for_sample.size());
+
+    for (int i = 0; i < static_cast<int>(rsentries_for_sample.size()); ++i) {
+      if (estate->prefix_cache->HasSequence(rsentries_for_sample[i]->mstates[0]->internal_id)) {
+        // LOG_INFO << "extend " << rsentries_for_sample[i]->mstates[0]->internal_id << " "
+        //          << sample_results[i].sampled_token_id.first;
+        estate->prefix_cache->ExtendSequence(rsentries_for_sample[i]->mstates[0]->internal_id,
+                                             IntTuple({sample_results[i].sampled_token_id.first}));
+      }
+    }
 
     // - Update the committed tokens of states.
     // - If a request is first-time prefilled, set the prefill finish time.
@@ -432,6 +481,7 @@ class NewRequestPrefillActionObj : public EngineActionObj {
   std::pair<Array<Data>, int> ChunkPrefillInputData(const RequestModelState& mstate,
                                                     int max_prefill_length) {
     if (mstate->inputs.empty()) {
+      return {{}, 0};
     }
     ICHECK(!mstate->inputs.empty());
     std::vector<Data> inputs;

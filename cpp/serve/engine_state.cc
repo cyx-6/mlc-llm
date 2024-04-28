@@ -38,7 +38,13 @@ void EngineStats::Reset() {
 
 TVM_REGISTER_OBJECT_TYPE(EngineStateObj);
 
-EngineState::EngineState() { data_ = make_object<EngineStateObj>(); }
+EngineState::EngineState(EngineConfig engine_config) {
+  ObjectPtr<EngineStateObj> n = make_object<EngineStateObj>();
+  n->prefix_cache =
+      PrefixCache(engine_config->max_total_sequence_length / engine_config->kv_cache_page_size,
+                  engine_config->kv_cache_page_size * 32, engine_config->max_num_sequence * 8);
+  data_ = std::move(n);
+}
 
 void EngineStateObj::Reset() {
   running_queue.clear();
@@ -46,6 +52,7 @@ void EngineStateObj::Reset() {
   request_states.clear();
   id_manager.Reset();
   stats.Reset();
+  prefix_cache->Reset();
 }
 
 RequestState EngineStateObj::GetRequestState(Request request) {

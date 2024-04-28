@@ -121,6 +121,12 @@ class BatchDecodeActionObj : public EngineActionObj {
     // - Update the committed tokens of states.
     for (int i = 0; i < num_rsentries; ++i) {
       mstates[i]->CommitToken(sample_results[i]);
+      if (estate->prefix_cache->HasSequence(mstates[i]->internal_id)) {
+        // LOG_INFO << "extend " << mstates[i]->internal_id << " "
+        //          << sample_results[i].sampled_token_id.first;
+        estate->prefix_cache->ExtendSequence(mstates[i]->internal_id,
+                                             IntTuple({sample_results[i].sampled_token_id.first}));
+      }
     }
 
     auto tend = std::chrono::high_resolution_clock::now();
