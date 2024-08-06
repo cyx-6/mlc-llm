@@ -246,6 +246,15 @@ class PrefixCacheImpl : public PrefixCacheObj {
    * \throw Error if sequence ID is not valid.
    */
   bool HasSequence(int64_t seq_id) final { return radix_tree_->HasSequence(seq_id); }
+  int GetSequenceLength(int64_t seq_id) final {
+    int d = 0;
+    for (auto [i, t] : uncommitted_extended_token_ids_) {
+      if (i == seq_id) {
+        d += static_cast<int>(t.size());
+      }
+    }
+    return static_cast<int>(radix_tree_->GetSequenceLength(seq_id)) + d;
+  }
 
   /*!
    * \brief Reset the prefix cache to initial status.
@@ -411,6 +420,11 @@ class NoPrefixCache : public PrefixCacheObj {
   bool HasSequence(int64_t seq_id) final {
     // Since there is no prefix cache, always return false.
     return false;
+  }
+
+  int GetSequenceLength(int64_t seq_id) final {
+    // Since there is no prefix cache, always return false.
+    return -1;
   }
 
   /*!

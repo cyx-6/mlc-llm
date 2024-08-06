@@ -115,6 +115,8 @@ class PrefixCacheObj : public Object {
    */
   virtual bool HasSequence(int64_t seq_id) = 0;
 
+  virtual int GetSequenceLength(int64_t seq_id) = 0;
+
   /*!
    * \brief Reset the prefix cache to initial status.
    */

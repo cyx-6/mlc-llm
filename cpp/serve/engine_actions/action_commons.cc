@@ -167,6 +167,8 @@ void ActionStepPostProcess(Array<Request> requests, EngineState estate, const Ar
       }
       if (!token_ids.empty()) {
         estate->prefix_cache->ExtendSequence(rsentry->mstates[0]->internal_id, token_ids);
+        CHECK_EQ(estate->prefix_cache->GetSequenceLength(rsentry->mstates[0]->internal_id),
+                 models[0]->DebugGetSequenceLength(rsentry->mstates[0]->internal_id));
       }
     }
   }

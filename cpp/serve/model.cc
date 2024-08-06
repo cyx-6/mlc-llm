@@ -212,6 +212,9 @@ class ModelImpl : public ModelObj {
                        const std::vector<int>& lengths) final {
     CHECK(!seq_ids.empty());
     CHECK_EQ(seq_ids.size(), lengths.size());
+    for (int i = 0; i < seq_ids.size(); ++i) {
+      debug_sequence_lengths_.at(seq_ids[i]) += lengths[i];
+    }
     int num_sequences = seq_ids.size();
     int total_length = 0;
 
@@ -287,6 +290,9 @@ class ModelImpl : public ModelObj {
     NVTXScopedRange nvtx_scope("BatchPrefillToLastHidden");
     CHECK(!seq_ids.empty());
     CHECK_EQ(seq_ids.size(), lengths.size());
+    for (int i = 0; i < seq_ids.size(); ++i) {
+      debug_sequence_lengths_.at(seq_ids[i]) += lengths[i];
+    }
     int num_sequences = seq_ids.size();
     int total_length = 0;
 
@@ -351,6 +357,9 @@ class ModelImpl : public ModelObj {
     NVTXScopedRange nvtx_scope("BatchDecode num_seqs=" + std::to_string(seq_ids.size()));
     int num_sequence = seq_ids.size();
 
+    for (int i = 0; i < seq_ids.size(); ++i) {
+      debug_sequence_lengths_.at(seq_ids[i]) += 1;
+    }
     CHECK(ft_.decode_func_.defined())
         << "`decode_with_embed` function is not found in the model. Please make sure the model is "
            "compiled with flag `--sep-embed` and `--enable-batching`";
@@ -411,6 +420,9 @@ class ModelImpl : public ModelObj {
                                     const std::vector<int64_t>& seq_ids) final {
     NVTXScopedRange nvtx_scope("BatchDecodeToLastHidden num_seqs=" +
                                std::to_string(seq_ids.size()));
+    for (int i = 0; i < seq_ids.size(); ++i) {
+      debug_sequence_lengths_.at(seq_ids[i]) += 1;
+    }
     int num_sequence = seq_ids.size();
 
     CHECK(ft_.decode_to_last_hidden_func_.defined())
@@ -620,6 +632,7 @@ class ModelImpl : public ModelObj {
       return;
     }
     ft_.kv_cache_add_sequence_func_(kv_cache_, seq_id);
+    debug_sequence_lengths_.emplace(seq_id, 0);
   }
 
   void ForkSequence(int64_t parent_seq_id, int64_t child_seq_id, int64_t fork_pos) final {
@@ -627,6 +640,11 @@ class ModelImpl : public ModelObj {
       return;
     }
     ft_.kv_cache_fork_sequence_func_(kv_cache_, parent_seq_id, child_seq_id, fork_pos);
+    if (fork_pos == -1) {
+      debug_sequence_lengths_.emplace(child_seq_id, debug_sequence_lengths_.at(parent_seq_id));
+    } else {
+      debug_sequence_lengths_.emplace(child_seq_id, fork_pos);
+    }
   }
 
   void RemoveSequence(int64_t seq_id) final {
@@ -634,6 +652,7 @@ class ModelImpl : public ModelObj {
       return;
     }
     ft_.kv_cache_remove_sequence_func_(kv_cache_, seq_id);
+    debug_sequence_lengths_.erase(seq_id);
   }
 
   void PopNFromKVCache(int64_t seq_id, int num_tokens) final {
@@ -641,6 +660,7 @@ class ModelImpl : public ModelObj {
       return;
     }
     ft_.kv_cache_popn_func_(kv_cache_, seq_id, num_tokens);
+    debug_sequence_lengths_.at(seq_id) -= num_tokens;
   }
 
   void CommitAcceptedTokenTreeNodesToKVCache(
@@ -862,6 +882,8 @@ class ModelImpl : public ModelObj {
     ft_.DebugCallFuncOnAllAllWorker(func_name);
   }
 
+  int DebugGetSequenceLength(int64_t seq_id) { return debug_sequence_lengths_.at(seq_id); }
+
  private:
   /*! \brief Load model configuration from JSON. */
   void LoadModelConfigJSON(const picojson::object& config) {
@@ -913,6 +935,7 @@ class ModelImpl : public ModelObj {
   bool trace_enabled_;
   // An enum indicating whether it's RNN-based.
   KVStateKind kind;
+  std::unordered_map<int64_t, int> debug_sequence_lengths_;
 };
 
 TVM_REGISTER_GLOBAL("mlc.copy_embedding_to_offset")

@@ -353,6 +353,8 @@ class ModelObj : public Object {
   /*! \brief Call the given global function on all workers. Only for debug purpose. */
   virtual void DebugCallFuncOnAllAllWorker(const String& func_name) = 0;
 
+  virtual int DebugGetSequenceLength(int64_t seq_id) = 0;
+
   static constexpr const char* _type_key = "mlc.serve.Model";
   static constexpr const bool _type_has_method_sequal_reduce = false;
   static constexpr const bool _type_has_method_shash_reduce = false;
