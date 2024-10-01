@@ -261,7 +261,7 @@ class FixedConcurrentRequestExecutor(Executor):  # pylint: disable=too-few-publi
         num_processes: Optional[int],
         disable_tqdm: bool,
         num_concurrent_requests: int,
-        multi_round: bool,
+        max_chat_round: int,
     ) -> None:
         if num_processes is None:
             # We assign each process at most 32 concurrent requests to send
@@ -269,7 +269,7 @@ class FixedConcurrentRequestExecutor(Executor):  # pylint: disable=too-few-publi
             num_processes = min((num_concurrent_requests + 31) // 32, 10)
         super().__init__(f_create_api_endpoint, num_processes, disable_tqdm)
         self.num_concurrent_requests = num_concurrent_requests
-        self.multi_round = multi_round
+        self.max_chat_round = max_chat_round
 
     def __call__(self, request_records: List[RequestRecord]) -> List[RequestRecord]:
         partitions: List[List[RequestRecord]] = [
@@ -374,6 +374,7 @@ class FixTimestampExecutor(Executor):  # pylint: disable=too-few-public-methods
         disable_tqdm: bool,
         max_schedule_gap: float,
         num_requests: int,
+        max_chat_round: int,
         request_rate: Optional[np.float32] = None,
     ) -> None:
         if num_processes is None:
@@ -383,6 +384,7 @@ class FixTimestampExecutor(Executor):  # pylint: disable=too-few-public-methods
         super().__init__(f_create_api_endpoint, num_processes, disable_tqdm)
         self.max_schedule_gap = max_schedule_gap
         self.num_requests = num_requests
+        self.max_chat_round = max_chat_round
         self.request_rate = request_rate
 
     def __call__(self, request_records: List[RequestRecord]) -> List[RequestRecord]:
@@ -519,7 +521,7 @@ def create_pipelines(
                             args.num_process_workers,
                             args.disable_tqdm,
                             num_concurrent_requests,
-                            args.multi_round,
+                            args.max_chat_round,
                         ),
                         cuda_profile_url=cuda_profile_url,
                     ),
@@ -551,6 +553,7 @@ def create_pipelines(
                         args.disable_tqdm,
                         args.max_schedule_gap,
                         args.num_requests,
+                        args.max_chat_round,
                         request_rate,
                     ),
                     cuda_profile_url=cuda_profile_url,
