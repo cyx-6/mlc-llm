@@ -252,12 +252,11 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
                 "type": "json_object",
                 "schema": data["schema"],
             }
-            num_tokens = 0
+            num_input_tokens = 0
             for message in messages:
-                num_tokens += len(
-                    self.tokenizer.encode(message["content"], add_special_tokens=False)
-                )
-            self.dataset.append((messages, schema, num_tokens))
+                num_input_tokens += len(self.tokenizer.encode(message["content"]))
+            output_max_tokens = len(self.tokenizer.encode(data["completion"]))
+            self.dataset.append((messages, schema, num_input_tokens, output_max_tokens))
 
     def generate_request_records(
         self,
@@ -267,9 +266,9 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
         output_len_std: float = 0.0,
     ) -> List[RequestRecord]:
         request_records = []
-        for messages, schema, num_tokens in self.dataset:
+        for messages, schema, num_input_tokens, output_max_tokens in self.dataset:
             # If the request does not have enough length, discard it.
-            if input_len is not None and num_tokens < input_len + 4 * input_len_std:
+            if input_len is not None and num_input_tokens < input_len + 4 * input_len_std:
                 continue
 
             if output_len is not None:
@@ -277,7 +276,7 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
                     round(np.random.normal(loc=output_len, scale=output_len_std)), 1
                 )
             else:
-                output_length = None
+                output_length = output_max_tokens
             request_records.append(
                 RequestRecord(
                     chat_cmpl=ChatCompletionRequest(
@@ -294,7 +293,7 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
                         start_time=0,
                         finish_time=0,
                         end_to_end_latency_s=0,
-                        input_tokens=num_tokens,
+                        input_tokens=num_input_tokens,
                     ),
                 )
             )
