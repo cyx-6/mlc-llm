@@ -7,7 +7,7 @@ import copy
 import os
 import random
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import requests
@@ -304,7 +304,7 @@ class FixedConcurrentRequestExecutor(Executor):  # pylint: disable=too-few-publi
                     partition,
                     self.num_concurrent_requests // self.num_processes
                     + int(i < self.num_concurrent_requests % self.num_processes),
-                    self.multi_round,
+                    self.max_chat_round,
                 )
                 for i, partition in enumerate(partitions)
             ]
@@ -321,26 +321,24 @@ class FixedConcurrentRequestExecutor(Executor):  # pylint: disable=too-few-publi
         f_create_api_endpoint: Callable[[], APIEndPoint],
         request_records: List[RequestRecord],
         num_concurrent_requests: int,
-        multi_round: bool,
+        max_chat_round: int,
     ) -> List[RequestRecord]:
         if len(request_records) == 0:
             return []
-        chat_history: List[List[ChatCompletionMessage]] = [
-            [] for _ in range(num_concurrent_requests)
-        ]
+        chatting_sessions: List[Tuple[List[ChatCompletionMessage], int]] = []
 
         async def process_task_impl(
             f_create_api_endpoint: Callable[[], APIEndPoint],
             request_records: List[RequestRecord],
             num_concurrent_requests: int,
-            multi_round: bool,
+            max_chat_round: int,
         ) -> List[RequestRecord]:
             api_endpoint = f_create_api_endpoint()
             updated_request_records: List[RequestRecord] = [None for _ in request_records]
             async with api_endpoint:
                 num_sent_request = 0
 
-                async def _task(i: int) -> None:
+                async def _task() -> None:
                     nonlocal num_sent_request
                     while True:
                         if num_sent_request == len(request_records):
@@ -348,23 +346,29 @@ class FixedConcurrentRequestExecutor(Executor):  # pylint: disable=too-few-publi
                         idx = num_sent_request
                         num_sent_request += 1
                         request = request_records[idx]
-
-                        if multi_round:
-                            request.chat_cmpl.messages = (
-                                chat_history[i] + request.chat_cmpl.messages
-                            )
+                        chat_history = []
+                        chat_round = 0
+                        if max_chat_round > 1 and len(chatting_sessions):
+                            chat_history, chat_round = chatting_sessions.pop(0)
+                            request.chat_cmpl.messages = chat_history + request.chat_cmpl.messages
 
                         updated_request_records[idx] = await api_endpoint(request)
 
-                        if multi_round:
-                            chat_history[i] = updated_request_records[idx].chat_cmpl.messages + [
-                                ChatCompletionMessage(
-                                    content=updated_request_records[idx].output_str,
-                                    role="assistant",
+                        if chat_round + 1 < max_chat_round:
+                            chatting_sessions.append(
+                                (
+                                    updated_request_records[idx].chat_cmpl.messages
+                                    + [
+                                        ChatCompletionMessage(
+                                            content=updated_request_records[idx].output_str,
+                                            role="assistant",
+                                        )
+                                    ],
+                                    chat_round + 1,
                                 )
-                            ]
+                            )
 
-                tasks = [asyncio.create_task(_task(i)) for i in range(num_concurrent_requests)]
+                tasks = [asyncio.create_task(_task()) for _ in range(num_concurrent_requests)]
                 await asyncio.gather(*tasks)
 
             return updated_request_records
@@ -374,7 +378,7 @@ class FixedConcurrentRequestExecutor(Executor):  # pylint: disable=too-few-publi
                 f_create_api_endpoint,
                 request_records,
                 num_concurrent_requests,
-                multi_round,
+                max_chat_round,
             )
         )
 
