@@ -72,6 +72,10 @@ class LogitProcessorObj : public Object {
   static constexpr const bool _type_has_method_sequal_reduce = false;
   static constexpr const bool _type_has_method_shash_reduce = false;
   TVM_DECLARE_BASE_OBJECT_INFO(LogitProcessorObj, Object);
+
+  double mask_sum = 0;
+  double mask_max = 0;
+  int mask_count = 0;
 };
 
 class LogitProcessor : public ObjectRef {

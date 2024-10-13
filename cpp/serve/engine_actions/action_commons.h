@@ -13,6 +13,7 @@
 #include "../engine.h"
 #include "../engine_state.h"
 #include "../event_trace_recorder.h"
+#include "../logit_processor.h"
 #include "../model.h"
 #include "action.h"
 
@@ -57,7 +58,7 @@ void RemoveRequestFromModel(EngineState estate, int64_t req_internal_id,
  * if a request is finished.
  */
 void ActionStepPostProcess(Array<Request> requests, EngineState estate, const Array<Model>& models,
-                           const Tokenizer& tokenizer,
+                           const Tokenizer& tokenizer, LogitProcessor logit_processor,
                            FRequestStreamCallback request_stream_callback,
                            int64_t max_single_sequence_length,
                            Optional<DraftTokenWorkspaceManager> draft_token_workspace_manager,

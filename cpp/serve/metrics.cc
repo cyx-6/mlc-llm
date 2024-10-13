@@ -146,6 +146,17 @@ picojson::object EngineMetrics::AsJSON() const {
   metrics["draft_time_by_batch_size"] = f_create_time_list(draft_time_by_batch_size);
   metrics["verify_time_by_batch_size"] = f_create_time_list(verify_time_by_batch_size);
 
+  metrics["grammar_init_time_avg"] =
+      picojson::value(grammar_init_sum / (grammar_init_count == 0 ? 1 : grammar_init_count));
+  metrics["grammar_init_count"] = picojson::value(static_cast<int64_t>(grammar_init_count));
+  metrics["grammar_init_time_sum"] = picojson::value(grammar_init_sum);
+  metrics["grammar_init_time_max"] = picojson::value(grammar_init_max);
+
+  metrics["mask_time_avg"] = picojson::value(mask_sum / ((mask_count == 0) ? 1 : mask_count));
+  metrics["mask_count"] = picojson::value(static_cast<int64_t>(mask_count));
+  metrics["mask_time_sum"] = picojson::value(mask_sum);
+  metrics["mask_time_max"] = picojson::value(mask_max);
+
   return metrics;
 }
 

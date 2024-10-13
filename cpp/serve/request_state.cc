@@ -5,6 +5,8 @@
 
 #include "request_state.h"
 
+#include <numeric>
+
 namespace mlc {
 namespace llm {
 namespace serve {
@@ -15,7 +17,8 @@ TVM_REGISTER_OBJECT_TYPE(RequestModelStateNode);
 
 RequestModelState::RequestModelState(
     Request request, int model_id, int64_t internal_id, Array<Data> inputs,
-    const std::optional<std::shared_ptr<GrammarStateInitContext>>& grammar_state_init_ctx) {
+    const std::optional<std::shared_ptr<GrammarStateInitContext>>& grammar_state_init_ctx,
+    double& tdelta) {
   ObjectPtr<RequestModelStateNode> n = make_object<RequestModelStateNode>();
   n->model_id = model_id;
   n->internal_id = internal_id;
@@ -23,7 +26,11 @@ RequestModelState::RequestModelState(
 
   if (grammar_state_init_ctx.has_value()) {
     // TODO(yixin): set rollback limit to a configurable value.
+    auto tstart = std::chrono::high_resolution_clock::now();
+
     n->grammar_state_matcher = GrammarStateMatcher(grammar_state_init_ctx.value(), 10);
+    auto tend = std::chrono::high_resolution_clock::now();
+    tdelta += static_cast<double>((tend - tstart).count()) / 1e9;
   }
 
   n->request = std::move(request);
@@ -144,7 +151,7 @@ RequestStateEntry::RequestStateEntry(
     Request request, int num_models, int64_t internal_id, int rng_seed,
     const std::vector<std::string>& token_table,
     const std::optional<std::shared_ptr<GrammarStateInitContext>>& grammar_state_init_ctx,
-    int parent_idx) {
+    double& tdelta, int parent_idx) {
   ObjectPtr<RequestStateEntryNode> n = make_object<RequestStateEntryNode>();
   Array<RequestModelState> mstates;
   Array<Data> inputs;
@@ -153,7 +160,8 @@ RequestStateEntry::RequestStateEntry(
   }
   mstates.reserve(num_models);
   for (int i = 0; i < num_models; ++i) {
-    mstates.push_back(RequestModelState(request, i, internal_id, inputs, grammar_state_init_ctx));
+    mstates.push_back(
+        RequestModelState(request, i, internal_id, inputs, grammar_state_init_ctx, tdelta));
   }
   n->status = RequestStateStatus::kPending;
   n->rng = RandomGenerator(rng_seed);

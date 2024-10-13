@@ -116,6 +116,11 @@ struct RequestMetrics {
   /*! \brief The time of finishing all decode. */
   std::chrono::high_resolution_clock::time_point finish_time_point;
 
+  double grammar_init = 0;
+
+  double mask_sum = 0;
+  double mask_max = 0;
+
   /*! \brief check whether the request metrics is a completed request */
   bool IsComplete() const { return prompt_tokens != 0 && completion_tokens != 0; }
 
@@ -187,6 +192,13 @@ struct EngineMetrics {
   /*! \brief speculative decoding metrics */
   SpecDecodeMetrics spec_decode;
 
+  double grammar_init_sum = 0;
+  int grammar_init_count = 0;
+  double grammar_init_max = 0;
+  double mask_sum = 0;
+  int mask_count = 0;
+  double mask_max = 0;
+
   /*! \brief The maximum batch size we track for batch decode time. */
   static constexpr const int64_t kEndFineGrainedTrackingBatchSize = 65;
   /*! \brief The list of batch decode time under different batch size. */
@@ -241,6 +253,9 @@ struct EngineMetrics {
     decode_tokens_sum += request_metrics.decode_tokens;
     jump_forward_tokens_sum += request_metrics.jump_forward_tokens;
     last_finished_request = request_metrics;
+    grammar_init_sum += request_metrics.grammar_init;
+    grammar_init_max = std::max(grammar_init_max, request_metrics.grammar_init);
+    ++grammar_init_count;
   }
   /*!
    * \brief Return the engine runtime metrics in JSON.

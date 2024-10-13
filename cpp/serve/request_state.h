@@ -125,7 +125,8 @@ class RequestModelState : public ObjectRef {
  public:
   explicit RequestModelState(
       Request request, int model_id, int64_t internal_id, Array<Data> inputs,
-      const std::optional<std::shared_ptr<GrammarStateInitContext>>& grammar_state_init_ctx);
+      const std::optional<std::shared_ptr<GrammarStateInitContext>>& grammar_state_init_ctx,
+      double& tdelta);
 
   TVM_DEFINE_MUTABLE_OBJECT_REF_METHODS(RequestModelState, ObjectRef, RequestModelStateNode);
 };
@@ -259,7 +260,7 @@ class RequestStateEntry : public ObjectRef {
       Request request, int num_models, int64_t internal_id, int rng_seed,
       const std::vector<std::string>& token_table,
       const std::optional<std::shared_ptr<GrammarStateInitContext>>& grammar_state_init_ctx,
-      int parent_idx = -1);
+      double& tdelta, int parent_idx = -1);
 
   TVM_DEFINE_MUTABLE_OBJECT_REF_METHODS(RequestStateEntry, ObjectRef, RequestStateEntryNode);
 };

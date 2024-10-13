@@ -153,7 +153,7 @@ void ProcessFinishedRequestStateEntries(
     const std::vector<RequestStateEntry>& finished_rsentries, EngineState estate,
     const Array<Model>& models, int max_single_sequence_length,
     Optional<DraftTokenWorkspaceManager> draft_token_workspace_manager,
-    Array<RequestStreamOutput>* callback_delta_outputs) {
+    Array<RequestStreamOutput>* callback_delta_outputs, LogitProcessor logit_processor) {
   NVTXScopedRange nvtx_scope("Process finished requests");
   // - Remove the finished request state entries.
   for (const RequestStateEntry& rsentry : finished_rsentries) {
@@ -204,6 +204,10 @@ void ProcessFinishedRequestStateEntries(
       rstate->metrics.finish_time_point = trequest_finish;
       estate->metrics.RequestFinishUpdate(rstate->metrics);
 
+      estate->metrics.mask_sum = logit_processor->mask_sum;
+      estate->metrics.mask_count = logit_processor->mask_count;
+      estate->metrics.mask_max = logit_processor->mask_max;
+
       // always stream back usage in backend
       callback_delta_outputs->push_back(RequestStreamOutput::Usage(
           root_rsentry->request->id, rstate->metrics.AsUsageJSONStr(true)));
@@ -213,7 +217,7 @@ void ProcessFinishedRequestStateEntries(
 }
 
 void ActionStepPostProcess(Array<Request> requests, EngineState estate, const Array<Model>& models,
-                           const Tokenizer& tokenizer,
+                           const Tokenizer& tokenizer, LogitProcessor logit_processor,
                            FRequestStreamCallback request_stream_callback,
                            int64_t max_single_sequence_length,
                            Optional<DraftTokenWorkspaceManager> draft_token_workspace_manager,
@@ -284,7 +288,8 @@ void ActionStepPostProcess(Array<Request> requests, EngineState estate, const Ar
 
   ProcessFinishedRequestStateEntries(estate->postproc_workspace.finished_rsentries, estate, models,
                                      max_single_sequence_length, draft_token_workspace_manager,
-                                     &estate->postproc_workspace.callback_delta_outputs);
+                                     &estate->postproc_workspace.callback_delta_outputs,
+                                     logit_processor);
 
   if (!estate->postproc_workspace.callback_delta_outputs.empty()) {
     NVTXScopedRange nvtx_scope("Call request stream callback");

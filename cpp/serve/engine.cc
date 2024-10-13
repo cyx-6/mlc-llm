@@ -395,8 +395,7 @@ class EngineImpl : public Engine {
           &n->model_workspaces_[0],
           /*require_hidden_states=*/engine_config->speculative_mode == SpeculativeMode::kEagle);
     }
-    LogitProcessor logit_processor =
-        n->models_[0]->CreateLogitProcessor(max_num_tokens, trace_recorder);
+    n->logit_processor_ = n->models_[0]->CreateLogitProcessor(max_num_tokens, trace_recorder);
     Sampler sampler = n->models_[0]->CreateSampler(
         max_num_tokens, static_cast<int>(n->models_.size()), trace_recorder);
     // - Initialize engine actions that represent state transitions.
@@ -404,8 +403,8 @@ class EngineImpl : public Engine {
       n->estate_->spec_draft_length = engine_config->spec_draft_length;
     }
     n->actions_ = CreateEngineActions(
-        n->models_, engine_config, model_configs, n->model_workspaces_, logit_processor, sampler,
-        draft_token_workspace_manager, n->tokenizer_, n->trace_recorder_);
+        n->models_, engine_config, model_configs, n->model_workspaces_, n->logit_processor_,
+        sampler, draft_token_workspace_manager, n->tokenizer_, n->trace_recorder_);
     n->draft_token_workspace_manager_ = draft_token_workspace_manager;
     // - Automatically set the threading backend max concurrency.
     n->engine_config_ = engine_config;
@@ -426,7 +425,14 @@ class EngineImpl : public Engine {
 
   bool Empty() final { return estate_->request_states.empty(); }
 
-  String JSONMetrics() final { return picojson::value(estate_->metrics.AsJSON()).serialize(true); }
+  String JSONMetrics() final {
+    LOG_FATAL << 123;
+    estate_->metrics.mask_sum = logit_processor_->mask_sum;
+    estate_->metrics.mask_count = logit_processor_->mask_count;
+    estate_->metrics.mask_max = logit_processor_->mask_max;
+
+    return picojson::value(estate_->metrics.AsJSON()).serialize(true);
+  }
 
   FRequestStreamCallback GetRequestStreamCallback() final { return request_stream_callback_; }
 
@@ -495,13 +501,15 @@ class EngineImpl : public Engine {
 
     int n = request->generation_cfg->n;
     int rng_seed = request->generation_cfg->seed;
+    auto tstart = std::chrono::high_resolution_clock::now();
     auto grammar_state_init_ctx =
         GetGrammarInitCtxFromResponseFormat(request->generation_cfg->response_format);
-
+    auto tend = std::chrono::high_resolution_clock::now();
     std::vector<RequestStateEntry> rsentries;
     // Create the request state entry for the input.
+    double tdelta = static_cast<double>((tend - tstart).count()) / 1e9;
     rsentries.emplace_back(request, models_.size(), estate_->id_manager.GetNewId(), rng_seed,
-                           token_table_, grammar_state_init_ctx);
+                           token_table_, grammar_state_init_ctx, tdelta);
     if (n > 1) {
       // Then create a request state entry for each parallel generation branch.
       // We add a offset to the rng seed so that to make generations different.
@@ -510,7 +518,7 @@ class EngineImpl : public Engine {
       for (int i = 0; i < n; ++i) {
         rsentries[0]->child_indices.push_back(rsentries.size());
         rsentries.emplace_back(request, models_.size(), estate_->id_manager.GetNewId(),
-                               rng_seed + i + 1, token_table_, grammar_state_init_ctx,
+                               rng_seed + i + 1, token_table_, grammar_state_init_ctx, tdelta,
                                /*parent_idx=*/0);
       }
     }
@@ -521,6 +529,7 @@ class EngineImpl : public Engine {
       rsentry->rstate = rstate.operator->();
     }
     request->rstate = rstate.operator->();
+    rstate->metrics.grammar_init = tdelta;
     estate_->request_states.emplace(request->id, rstate);
   }
 
@@ -594,7 +603,7 @@ class EngineImpl : public Engine {
         processed_requests = action->Step(estate_);
       }
       if (!processed_requests.empty()) {
-        ActionStepPostProcess(processed_requests, estate_, models_, tokenizer_,
+        ActionStepPostProcess(processed_requests, estate_, models_, tokenizer_, logit_processor_,
                               request_stream_callback_, engine_config_->max_single_sequence_length,
                               draft_token_workspace_manager_, trace_recorder_);
         return;
@@ -849,6 +858,8 @@ class EngineImpl : public Engine {
   Optional<DraftTokenWorkspaceManager> draft_token_workspace_manager_;
   // Event trace recorder.
   Optional<EventTraceRecorder> trace_recorder_;
+
+  LogitProcessor logit_processor_;
 };
 
 Result<EngineCreationOutput> Engine::Create(const std::string& engine_config_json_str,

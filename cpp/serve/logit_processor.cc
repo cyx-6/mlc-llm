@@ -385,6 +385,8 @@ class LogitProcessorImpl : public LogitProcessorObj {
 
     std::memset(p_seq_ids, 0, batch_size * sizeof(int32_t));
 
+    double tmask = 0;
+
     for (int i = 0; i < static_cast<int>(mstates.size()); ++i) {
       int token_start_offset = cum_num_token == nullptr ? i : cum_num_token->at(i);
       int token_number =
@@ -412,8 +414,10 @@ class LogitProcessorImpl : public LogitProcessorObj {
           bitmask_dltensor.data = p_bitmask + (token_start_offset + j) * bitmask_size_;
           bitmask_dltensor.shape = bitmask_shape;
           bitmask_dltensor.ndim = 1;
-
+          auto tstart = std::chrono::high_resolution_clock::now();
           mstates[i]->FindNextTokenBitmask(&bitmask_dltensor);
+          auto tend = std::chrono::high_resolution_clock::now();
+          tmask += static_cast<double>((tend - tstart).count() / 1e9);
           p_seq_ids[token_start_offset + j] = 1;
 
           if (draft_token_seq.size() > 0) {
@@ -442,6 +446,7 @@ class LogitProcessorImpl : public LogitProcessorObj {
     NDArray bitmask_host = bitmask_host_.CreateView({batch_size, bitmask_size_}, dtype_i32_);
     NDArray bitmask_device = bitmask_device_.CreateView({batch_size, bitmask_size_}, dtype_i32_);
 
+    auto tstart = std::chrono::high_resolution_clock::now();
     // - Copy arrays to GPU.
     CopyArray(/*src=*/seq_ids_host, /*dst=*/seq_ids_device, copy_stream_);
     CopyArray(/*src=*/bitmask_host, /*dst=*/bitmask_device, copy_stream_);
@@ -449,6 +454,11 @@ class LogitProcessorImpl : public LogitProcessorObj {
 
     // - Call kernel.
     apply_bitmask_func_(logits, seq_ids_device, bitmask_device);
+    auto tend = std::chrono::high_resolution_clock::now();
+    tmask += static_cast<double>((tend - tstart).count() / 1e9);
+    mask_max = std::max(mask_max, tmask);
+    mask_sum += tmask;
+    ++mask_count;
     if (trace_recorder_.defined()) {
       TVMSynchronize(device_.device_type, device_.device_id, /*stream=*/nullptr);
     }
