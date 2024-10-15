@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import concurrent.futures
 import copy
+import json
 import os
 import random
 import time
@@ -353,6 +354,44 @@ class FixedConcurrentRequestExecutor(Executor):  # pylint: disable=too-few-publi
                             request.chat_cmpl.messages = chat_history + request.chat_cmpl.messages
 
                         updated_request_records[idx] = await api_endpoint(request)
+                        try:
+                            output = json.loads(updated_request_records[idx].output_str.lower())
+                            answer = json.loads(updated_request_records[idx].ground_truth.lower())
+
+                            def _compare(o, a) -> str:
+                                if isinstance(a, dict):
+                                    if not isinstance(o, dict):
+                                        return "malformed"
+                                    if not set(a.keys()) == set(o.keys()):
+                                        return "key_error"
+                                    for k in a.keys():
+                                        r = _compare(o[k], a[k])
+                                        if not r == "matched":
+                                            return r
+                                if str(o) != str(a):
+                                    return "value_error"
+                                return "matched"
+
+                            result = _compare(output, answer)
+                            updated_request_records[idx].metrics.json_completion[result] = 1
+
+                        except json.JSONDecodeError:
+                            updated_request_records[idx].metrics.json_completion["malformed"] = 1
+
+                        if updated_request_records[idx].metrics.json_completion["matched"] == 0:
+                            print("==========Prompt==========")
+                            print(updated_request_records[idx].chat_cmpl.messages)
+                            print("----------Schema----------")
+                            print(
+                                updated_request_records[idx].chat_cmpl.response_format.model_dump()
+                            )
+                            print("----------Result----------")
+                            print(updated_request_records[idx].metrics.json_completion)
+                            print("----------Output----------")
+                            print(updated_request_records[idx].output_str)
+                            print("----------Answer----------")
+                            print(updated_request_records[idx].ground_truth)
+                            print("==========================")
 
                         if chat_round + 1 < max_chat_round:
                             chatting_sessions.append(

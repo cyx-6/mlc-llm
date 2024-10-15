@@ -42,6 +42,13 @@ class Metrics(BaseModel):
 
     exec_feature: Optional[Dict[str, Any]] = None
 
+    json_completion: Dict[str, int] = {
+        "malformed": 0,
+        "key_error": 0,
+        "value_error": 0,
+        "matched": 0,
+    }
+
 
 class RequestRecord(BaseModel):
     """The request records collected from LLM inference requests."""
@@ -53,6 +60,7 @@ class RequestRecord(BaseModel):
     timestamp: Optional[float] = None
     metrics: Optional[Metrics] = None
     error_msg: Optional[str] = None
+    ground_truth: Optional[str] = None
 
 
 def generate_metrics_summary(
@@ -101,6 +109,12 @@ def generate_metrics_summary(
         ),
         **report,
     }
+
+    json_completion = {"malformed": 0, "key_error": 0, "value_error": 0, "matched": 0}
+    for metric in request_metrics:
+        for key in metric.json_completion:
+            json_completion[key] += metric.json_completion[key]
+    print(json_completion)
     return report
 
 
@@ -124,7 +138,14 @@ def _compute_metrics_statistics(metrics: List[Union[Metrics, ServerMetrics]]) ->
     report: Dict = {}
     df = pd.DataFrame([metric.model_dump() for metric in metrics])
     for key, _ in metrics[0].model_fields.items():
-        if key in ["success", "start_time", "finish_time", "server_metrics", "exec_feature"]:
+        if key in [
+            "success",
+            "start_time",
+            "finish_time",
+            "server_metrics",
+            "exec_feature",
+            "json_completion",
+        ]:
             continue
         if key in df.columns:
             series = df[key].dropna()

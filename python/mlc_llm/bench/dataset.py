@@ -256,7 +256,9 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
             for message in messages:
                 num_input_tokens += len(self.tokenizer.encode(message["content"]))
             output_max_tokens = len(self.tokenizer.encode(data["completion"]))
-            self.dataset.append((messages, schema, num_input_tokens, output_max_tokens))
+            self.dataset.append(
+                (messages, schema, num_input_tokens, output_max_tokens, data["completion"])
+            )
 
     def generate_request_records(
         self,
@@ -266,7 +268,7 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
         output_len_std: float = 0.0,
     ) -> List[RequestRecord]:
         request_records = []
-        for messages, schema, num_input_tokens, output_max_tokens in self.dataset:
+        for messages, schema, num_input_tokens, output_max_tokens, ground_truth in self.dataset:
             # If the request does not have enough length, discard it.
             if input_len is not None and num_input_tokens < input_len + 4 * input_len_std:
                 continue
@@ -276,7 +278,7 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
                     round(np.random.normal(loc=output_len, scale=output_len_std)), 1
                 )
             else:
-                output_length = output_max_tokens
+                output_length = output_max_tokens * 10
             request_records.append(
                 RequestRecord(
                     chat_cmpl=ChatCompletionRequest(
@@ -295,6 +297,7 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
                         end_to_end_latency_s=0,
                         input_tokens=num_input_tokens,
                     ),
+                    ground_truth=ground_truth,
                 )
             )
         return request_records
