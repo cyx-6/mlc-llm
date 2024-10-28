@@ -251,7 +251,12 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
         self.tokenizer = tokenizer
         self.dataset = []
         for data in raw_dataset:
-            messages = data["prompt"]
+            messages = [
+                {
+                    "content": data["prompt"][0]["content"] + " " + data["prompt"][1]["content"],
+                    "role": data["prompt"][1]["role"],
+                },
+            ]
             if enable:
                 schema = {
                     "type": "json_object",

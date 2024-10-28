@@ -7,10 +7,9 @@ import time
 import traceback
 from typing import Optional
 
-from typing_extensions import Self
-
 from mlc_llm.bench.request_record import Metrics, RequestRecord, ServerMetrics
 from mlc_llm.support import logging
+from typing_extensions import Self
 
 logging.enable_logging()
 logger = logging.getLogger(__name__)
@@ -80,6 +79,18 @@ class OpenAIChatEndPoint(APIEndPoint):
             and request_record.chat_cmpl.debug_config.ignore_eos
         ):
             payload["ignore_eos"] = True
+
+        pop_keys = ["top_logprobs", "tool_choice"]
+        for k, v in payload.items():
+            if v is None:
+                pop_keys.append(k)
+        for k in pop_keys:
+            payload.pop(k)
+
+        if "response_format" in payload:
+            payload["guided_json"] = json.loads(payload["response_format"]["json_schema"])
+            payload["guided_decoding_backend"] = "outlines"
+            payload.pop("response_format")
 
         generated_text = ""
         first_chunk_output_str = ""
