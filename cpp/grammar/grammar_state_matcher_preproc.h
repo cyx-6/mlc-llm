@@ -411,13 +411,13 @@ inline GrammarInitContextCacheImpl::GrammarInitContextCacheImpl(
 
 inline std::shared_ptr<GrammarStateInitContext>
 GrammarInitContextCacheImpl::GetInitContextForJSONSchema(const std::string& schema) {
-  auto it = init_ctx_for_schema_cache_.find(schema);
-  if (it != init_ctx_for_schema_cache_.end()) {
-    return it->second;
-  }
+  // auto it = init_ctx_for_schema_cache_.find(schema);
+  // if (it != init_ctx_for_schema_cache_.end()) {
+  //   return it->second;
+  // }
   auto init_ctx =
       GrammarStateMatcher::CreateInitContext(BNFGrammar::FromSchema(schema), token_table_);
-  init_ctx_for_schema_cache_[schema] = init_ctx;
+  // init_ctx_for_schema_cache_[schema] = init_ctx;
   return init_ctx;
 }
 

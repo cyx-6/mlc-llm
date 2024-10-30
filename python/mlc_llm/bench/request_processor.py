@@ -11,13 +11,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import requests
-from tqdm import tqdm
-from transformers import AutoTokenizer  # pylint: disable=import-error
-
 from mlc_llm.bench.api_endpoint import APIEndPoint
 from mlc_llm.bench.request_record import RequestRecord
 from mlc_llm.protocol.openai_api_protocol import ChatCompletionMessage, DebugConfig
 from mlc_llm.support import logging
+from tqdm import tqdm
+from transformers import AutoTokenizer  # pylint: disable=import-error
 
 logging.enable_logging()
 logger = logging.getLogger(__name__)
@@ -55,7 +54,6 @@ class SampleRequests(RequestProcessor):  # pylint: disable=too-few-public-method
         while len(samples) < self.num_requests:
             # Create a new list so that the in-place shuffle does not mutate the input list.
             records = list(request_records)
-            random.shuffle(records)
             samples += copy.deepcopy(records)
         samples = samples[: self.num_requests]
         for i, record in enumerate(samples):

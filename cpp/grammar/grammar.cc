@@ -56,7 +56,7 @@ TVM_REGISTER_GLOBAL("mlc.grammar.BNFGrammarFromJSON").set_body_typed([](String j
 BNFGrammar BNFGrammar::FromSchema(const std::string& schema, std::optional<int> indent,
                                   std::optional<std::pair<std::string, std::string>> separators,
                                   bool strict_mode) {
-  return FromEBNFString(JSONSchemaToEBNF(schema, indent, separators, strict_mode));
+  return FromEBNFString(JSONSchemaToEBNF(schema, std::nullopt, std::nullopt, strict_mode));
 }
 
 TVM_REGISTER_GLOBAL("mlc.grammar.BNFGrammarFromSchema").set_body([](TVMArgs args, TVMRetValue* rv) {
