@@ -7,10 +7,9 @@ import time
 import traceback
 from typing import Optional
 
-from typing_extensions import Self
-
 from mlc_llm.bench.request_record import Metrics, RequestRecord, ServerMetrics
 from mlc_llm.support import logging
+from typing_extensions import Self
 
 logging.enable_logging()
 logger = logging.getLogger(__name__)
@@ -81,12 +80,15 @@ class OpenAIChatEndPoint(APIEndPoint):
         ):
             payload["ignore_eos"] = True
 
+        if "response_format" in payload:
+            payload["response_format"]["schema"] = payload["response_format"]["json_schema"]
+            payload["response_format"].pop("json_schema")
+
         generated_text = ""
         first_chunk_output_str = ""
         time_to_first_token_s = None
         start_time = time.monotonic()
         server_metrics = None
-
         try:
             async with self.client.post(self.url, json=payload, headers=self.headers) as response:
                 assert response.status == 200, await response.text()

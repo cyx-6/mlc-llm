@@ -7,14 +7,13 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 from datasets import load_dataset  # pylint: disable=import-error
-from transformers import AutoTokenizer  # pylint: disable=import-error
-
 from mlc_llm.bench.request_record import Metrics, RequestRecord
 from mlc_llm.protocol.openai_api_protocol import (
     ChatCompletionMessage,
     ChatCompletionRequest,
     DebugConfig,
 )
+from transformers import AutoTokenizer  # pylint: disable=import-error
 
 
 class Dataset:  # pylint: disable=too-few-public-methods
@@ -242,21 +241,27 @@ class LLMPerfDataset(Dataset):  # pylint: disable=too-few-public-methods
 class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
     """The dataset class for JSON dataset."""
 
-    def __init__(self, tokenizer: AutoTokenizer) -> None:
-        raw_dataset = load_dataset("NousResearch/json-mode-eval")
+    def __init__(self, dataset_path: str, tokenizer: AutoTokenizer, enable: bool) -> None:
+        if dataset_path.startswith("HF://"):
+            assert len(dataset_path) > 5
+            raw_dataset = load_dataset(dataset_path[5:])["train"]
+        else:
+            with open(dataset_path, encoding="utf-8") as f:
+                raw_dataset = json.load(f)
         self.tokenizer = tokenizer
         self.dataset = []
-        for data in raw_dataset["train"]:
+        for data in raw_dataset:
             messages = data["prompt"]
-            schema = {
-                "type": "json_object",
-                "schema": data["schema"],
-            }
+            if enable:
+                schema = {
+                    "type": "json_object",
+                    "schema": data["schema"],
+                }
+            else:
+                schema = None
             num_tokens = 0
             for message in messages:
-                num_tokens += len(
-                    self.tokenizer.encode(message["content"], add_special_tokens=False)
-                )
+                num_tokens += len(self.tokenizer.encode(message["content"]))
             self.dataset.append((messages, schema, num_tokens))
 
     def generate_request_records(
@@ -272,12 +277,8 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
             if input_len is not None and num_tokens < input_len + 4 * input_len_std:
                 continue
 
-            if output_len is not None:
-                output_length = max(
-                    round(np.random.normal(loc=output_len, scale=output_len_std)), 1
-                )
-            else:
-                output_length = None
+            assert output_len is not None
+            output_length = max(round(np.random.normal(loc=output_len, scale=output_len_std)), 1)
             request_records.append(
                 RequestRecord(
                     chat_cmpl=ChatCompletionRequest(
@@ -288,6 +289,7 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
                         model="",
                         max_tokens=output_length,
                         response_format=schema,
+                        debug_config=DebugConfig(grammar_execution_mode="constraint"),
                     ),
                     metrics=Metrics(
                         success=False,
@@ -490,7 +492,8 @@ class JSONModeEvalDataset(Dataset):  # pylint: disable=too-few-public-methods
 SUPPORTED_DATASET = [
     "sharegpt",
     "llmperf",
-    "json-mode-eval",
+    "json-mode-eval-on",
+    "json-mode-eval-off",
 ]
 
 
@@ -512,9 +515,14 @@ def create_dataset(args: argparse.Namespace, tokenizer: AutoTokenizer) -> "Datas
             args.apply_chat_template is False
         ), "LLMPerf dataset does not support applying chat template"
         return LLMPerfDataset(args.dataset_path, args.num_requests * 4, tokenizer)
-    if args.dataset == "json-mode-eval":
+    if args.dataset == "json-mode-eval-on":
         assert (
             args.apply_chat_template is False
         ), "JSON mode evaluation does not support applying chat template"
-        return JSONModeEvalDataset(tokenizer)
+        return JSONModeEvalDataset(args.dataset_path, tokenizer, True)
+    if args.dataset == "json-mode-eval-off":
+        assert (
+            args.apply_chat_template is False
+        ), "JSON mode evaluation does not support applying chat template"
+        return JSONModeEvalDataset(args.dataset_path, tokenizer, False)
     raise ValueError(f"Unrecognized dataset {args.dataset}")
