@@ -7,10 +7,9 @@ import time
 import traceback
 from typing import Optional
 
-from typing_extensions import Self
-
 from mlc_llm.bench.request_record import Metrics, RequestRecord, ServerMetrics
 from mlc_llm.support import logging
+from typing_extensions import Self
 
 logging.enable_logging()
 logger = logging.getLogger(__name__)
@@ -50,7 +49,8 @@ class OpenAIChatEndPoint(APIEndPoint):
 
         self.timeout = timeout
         self.client: aiohttp.ClientSession = None
-        self.url = f"http://{host}:{port}/v1/chat/completions"
+        # self.url = f"http://{host}:{port}/v1/chat/completions"
+        self.url = f"http://{host}:{port}/generate"
         self.headers = {"Content-Type": "application/json"}
         if os.getenv("MLC_LLM_API_KEY"):
             self.headers["Authorization"] = f"Bearer {os.getenv('MLC_LLM_API_KEY')}"
@@ -81,6 +81,17 @@ class OpenAIChatEndPoint(APIEndPoint):
         ):
             payload["ignore_eos"] = True
 
+        payload = {
+            "text": payload["messages"][0]["content"] + " " + payload["messages"][1]["content"],
+            "sampling_params": {
+                "temperature": 0,
+                "top_k": 1,
+                "max_new_tokens": 100,
+                "json_schema": "{}",
+            },
+            "stream": True,
+        }
+
         generated_text = ""
         first_chunk_output_str = ""
         time_to_first_token_s = None
@@ -100,10 +111,11 @@ class OpenAIChatEndPoint(APIEndPoint):
                         if raw_data == b"[DONE]":
                             continue
                         data = json.loads(raw_data)
-                        if not data["choices"]:
-                            continue
-                        delta = data["choices"][0]["delta"]
-                        content = delta.get("content", None)
+                        content = data["text"]
+                        # if not data["choices"]:
+                        #     continue
+                        # delta = data["choices"][0]["delta"]
+                        # content = delta.get("content", None)
                         if content is not None and not time_to_first_token_s:
                             time_to_first_token_s = time.monotonic() - start_time
                             first_chunk_output_str = content
