@@ -80,7 +80,7 @@ class OpenAIChatEndPoint(APIEndPoint):
         ):
             payload["ignore_eos"] = True
 
-        if "response_format" in payload:
+        if "response_format" in payload and payload["response_format"]:
             payload["response_format"]["schema"] = payload["response_format"]["json_schema"]
             payload["response_format"].pop("json_schema")
 
